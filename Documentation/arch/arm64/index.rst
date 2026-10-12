@@ -28,6 +28,7 @@ ARM64 Architecture
     sve
     tagged-address-abi
     tagged-pointers
+    x620-relay
 
     features
 

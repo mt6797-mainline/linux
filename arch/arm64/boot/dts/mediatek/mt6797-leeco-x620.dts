@@ -1,0 +1,68 @@
+// SPDX-License-Identifier: GPL-2.0-only
+/dts-v1/;
+#include "mt6797.dtsi"
+
+/ {
+	model = "LeEco X620 (U-Boot relay bring-up)";
+	compatible = "leeco,x620", "mediatek,mt6797";
+	memory@40000000 {
+		device_type = "memory";
+		reg = <0 0x40000000 0 0x20000000>;
+	};
+	chosen {
+		#address-cells = <2>;
+		#size-cells = <2>;
+		ranges;
+		bootargs = "console=tty0 earlycon=x620ram,mmio32,0x444bf000 keep_bootcon loglevel=8 ignore_loglevel printk.time=1 clk_ignore_unused pd_ignore_unused maxcpus=1 cpuidle.off=1 rdinit=/init panic=0 fbcon=nodefer fbcon=font:TER16x32";
+		framebuffer@bd0c0000 {
+			compatible = "simple-framebuffer";
+			reg = <0 0xbd0c0000 0 0x7f8000>;
+			width = <1080>;
+			height = <1920>;
+			stride = <4352>;
+			format = "x8r8g8b8";
+		};
+	};
+	reserved-memory {
+		#address-cells = <2>;
+		#size-cells = <2>;
+		ranges;
+		spm@40000000 { reg = <0 0x40000000 0 0x1000>; no-map; };
+		lk-dtb@44000000 { reg = <0 0x44000000 0 0x400000>; no-map; };
+		vendor-logs@44400000 { reg = <0 0x44400000 0 0xbf000>; no-map; };
+		/* Raw persistent console is read by stock TWRP; not owned by ramoops. */
+		relay-console@444bf000 { reg = <0 0x444bf000 0 0x10000>; no-map; };
+		vendor-dump@444cf000 { reg = <0 0x444cf000 0 0x31000>; no-map; };
+		atf@44600000 { reg = <0 0x44600000 0 0x70000>; no-map; };
+		preloader@44800000 { reg = <0 0x44800000 0 0x100000>; no-map; };
+		lk@46000000 { reg = <0 0x46000000 0 0x400000>; no-map; };
+		framebuffer@bd0c0000 { reg = <0 0xbd0c0000 0 0x1be0000>; no-map; };
+	};
+	lk-refresh@1400b000 {
+		compatible = "leeco,x620-lk-refresh";
+		reg = <0 0x1400b000 0 0x1000>,
+		      <0 0x1401c000 0 0x1000>,
+		      <0 0x1401f000 0 0x1000>;
+		leeco,framebuffer = <0xbd0c0000>;
+	};
+};
+
+/* First boot inherits clocks and pins; no PLL or power-domain changes. */
+&topckgen { status = "disabled"; };
+&infrasys { status = "disabled"; };
+&apmixedsys { status = "disabled"; };
+&mmsys { status = "disabled"; };
+&imgsys { status = "disabled"; };
+&vdecsys { status = "disabled"; };
+&vencsys { status = "disabled"; };
+&scpsys { status = "disabled"; };
+&pio { status = "disabled"; };
+&cpu1 { status = "disabled"; };
+&cpu2 { status = "disabled"; };
+&cpu3 { status = "disabled"; };
+&cpu4 { status = "disabled"; };
+&cpu5 { status = "disabled"; };
+&cpu6 { status = "disabled"; };
+&cpu7 { status = "disabled"; };
+&cpu8 { status = "disabled"; };
+&cpu9 { status = "disabled"; };

@@ -5,6 +5,17 @@
 
 menu "Misc devices"
 
+config X620_RELAY_DIAGNOSTICS
+	bool "LeEco X620 retained-LK boot diagnostics"
+	depends on ARM64 && OF && FB_SIMPLE=y
+	select SERIAL_CORE
+	select SERIAL_CORE_CONSOLE
+	select SERIAL_EARLYCON
+	help
+	  Temporary X620 bring-up adapter: persistent early console and refresh
+	  of the display path initialized by stock LK and retained by U-Boot.
+	  This does not initialize the panel or display clocks.
+
 config SENSORS_LIS3LV02D
 	tristate
 	depends on INPUT
