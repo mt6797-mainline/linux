@@ -13,6 +13,7 @@
 #include <linux/phy/phy.h>
 #include <linux/platform_device.h>
 #include <linux/reset.h>
+#include <linux/seq_file.h>
 #include <linux/units.h>
 
 #include <video/mipi_display.h>
@@ -41,7 +42,7 @@
 #define CMD_DONE_INT_FLAG		BIT(1)
 #define TE_RDY_INT_FLAG			BIT(2)
 #define VM_DONE_INT_FLAG		BIT(3)
-#define EXT_TE_RDY_INT_FLAG		BIT(4)
+#define MT6797_FRAME_DONE_INT_FLAG	BIT(4)
 #define DSI_BUSY			BIT(31)
 
 #define DSI_CON_CTRL		0x10
@@ -193,6 +194,8 @@ struct mtk_dsi_driver_data {
 	bool has_size_ctl;
 	bool cmdq_long_packet_ctl;
 	bool support_per_frame_lp;
+	bool command_mode;
+	bool legacy_ps;
 };
 
 struct mtk_dsi {
@@ -211,6 +214,7 @@ struct mtk_dsi {
 	struct clk *hs_clk;
 
 	u32 data_rate;
+	unsigned long hs_rate;
 
 	unsigned long mode_flags;
 	enum mipi_dsi_pixel_format format;
@@ -220,6 +224,16 @@ struct mtk_dsi {
 	int refcount;
 	bool enabled;
 	bool lanes_ready;
+	bool frame_pending;
+	spinlock_t frame_lock;
+	struct mutex transfer_lock;
+	void (*frame_cb)(void *data);
+	void *frame_cb_data;
+	void (*te_cb)(void *data);
+	void *te_cb_data;
+	u64 te_events;
+	u64 frames_started;
+	u64 frames_done;
 	u32 irq_data;
 	wait_queue_head_t irq_wait_queue;
 	const struct mtk_dsi_driver_data *driver_data;
@@ -388,6 +402,8 @@ static void mtk_dsi_rxtx_control(struct mtk_dsi *dsi)
 
 	if (dsi->mode_flags & MIPI_DSI_MODE_NO_EOT_PACKET)
 		regval |= DIS_EOT;
+	if (dsi->driver_data->command_mode)
+		regval |= EXT_TE_EN;
 
 	writel(regval, dsi->regs + DSI_TXRX_CTRL);
 }
@@ -410,13 +426,16 @@ static void mtk_dsi_ps_control(struct mtk_dsi *dsi, bool config_vact)
 	default:
 		fallthrough;
 	case MIPI_DSI_FMT_RGB888:
-		ps_val |= FIELD_PREP(DSI_PS_SEL, PACKED_PS_24BIT_RGB888);
+		ps_val |= FIELD_PREP(DSI_PS_SEL,
+				     dsi->driver_data->legacy_ps ? 2 : PACKED_PS_24BIT_RGB888);
 		break;
 	case MIPI_DSI_FMT_RGB666:
-		ps_val |= FIELD_PREP(DSI_PS_SEL, LOOSELY_PS_24BIT_RGB666);
+		ps_val |= FIELD_PREP(DSI_PS_SEL,
+				     dsi->driver_data->legacy_ps ? 1 : LOOSELY_PS_24BIT_RGB666);
 		break;
 	case MIPI_DSI_FMT_RGB666_PACKED:
-		ps_val |= FIELD_PREP(DSI_PS_SEL, PACKED_PS_18BIT_RGB666);
+		ps_val |= FIELD_PREP(DSI_PS_SEL,
+				     dsi->driver_data->legacy_ps ? 3 : PACKED_PS_18BIT_RGB666);
 		break;
 	case MIPI_DSI_FMT_RGB565:
 		ps_val |= FIELD_PREP(DSI_PS_SEL, PACKED_PS_16BIT_RGB565);
@@ -605,6 +624,8 @@ static void mtk_dsi_set_interrupt_enable(struct mtk_dsi *dsi)
 {
 	u32 inten = LPRX_RD_RDY_INT_FLAG | CMD_DONE_INT_FLAG | VM_DONE_INT_FLAG;
 
+	if (dsi->driver_data->command_mode)
+		inten |= TE_RDY_INT_FLAG | MT6797_FRAME_DONE_INT_FLAG;
 	writel(inten, dsi->regs + DSI_INTEN);
 }
 
@@ -643,7 +664,36 @@ static irqreturn_t mtk_dsi_irq(int irq, void *dev_id)
 	u32 status, tmp;
 	u32 flag = LPRX_RD_RDY_INT_FLAG | CMD_DONE_INT_FLAG | VM_DONE_INT_FLAG;
 
+	if (dsi->driver_data->command_mode)
+		flag |= TE_RDY_INT_FLAG | MT6797_FRAME_DONE_INT_FLAG;
 	status = readl(dsi->regs + DSI_INTSTA) & flag;
+	if (dsi->driver_data->command_mode) {
+		unsigned long flags;
+
+		if (!status)
+			return IRQ_NONE;
+		if (status & LPRX_RD_RDY_INT_FLAG)
+			mtk_dsi_mask(dsi, DSI_RACK, RACK, RACK);
+		mtk_dsi_mask(dsi, DSI_INTSTA, status, 0);
+		/* Only a completed pixel stream, not a panel command, is a vblank. */
+		spin_lock_irqsave(&dsi->frame_lock, flags);
+		if ((status & MT6797_FRAME_DONE_INT_FLAG) && dsi->frame_pending) {
+			dsi->frame_pending = false;
+			dsi->frames_done++;
+			if (dsi->frame_cb)
+				dsi->frame_cb(dsi->frame_cb_data);
+		}
+		if (status & TE_RDY_INT_FLAG) {
+			dsi->te_events++;
+			if (dsi->te_cb)
+				dsi->te_cb(dsi->te_cb_data);
+		}
+		spin_unlock_irqrestore(&dsi->frame_lock, flags);
+		/* Finish classifying this IRQ before a waiting command can start a frame. */
+		mtk_dsi_irq_data_set(dsi, status);
+		wake_up_interruptible(&dsi->irq_wait_queue);
+		return IRQ_HANDLED;
+	}
 
 	if (status) {
 		do {
@@ -690,6 +740,8 @@ static int mtk_dsi_poweron(struct mtk_dsi *dsi)
 
 	dsi->data_rate = DIV_ROUND_UP_ULL(dsi->vm.pixelclock * bit_per_pixel,
 					  dsi->lanes);
+	if (dsi->driver_data->command_mode && dsi->hs_rate)
+		dsi->data_rate = dsi->hs_rate;
 
 	ret = clk_set_rate(dsi->hs_clk, dsi->data_rate);
 	if (ret < 0) {
@@ -697,7 +749,9 @@ static int mtk_dsi_poweron(struct mtk_dsi *dsi)
 		goto err_refcount;
 	}
 
-	phy_power_on(dsi->phy);
+	ret = phy_power_on(dsi->phy);
+	if (ret)
+		goto err_refcount;
 
 	ret = clk_prepare_enable(dsi->engine_clk);
 	if (ret < 0) {
@@ -752,7 +806,9 @@ static void mtk_dsi_poweroff(struct mtk_dsi *dsi)
 	 */
 	mtk_dsi_stop(dsi);
 
-	mtk_dsi_switch_to_cmd_mode(dsi, VM_DONE_INT_FLAG, 500);
+	if (!dsi->driver_data->command_mode)
+		mtk_dsi_switch_to_cmd_mode(dsi, VM_DONE_INT_FLAG, 500);
+	WRITE_ONCE(dsi->frame_pending, false);
 	mtk_dsi_reset_engine(dsi);
 	mtk_dsi_lane0_ulp_mode_enter(dsi);
 	mtk_dsi_clk_ulp_mode_enter(dsi);
@@ -793,7 +849,8 @@ static void mtk_output_dsi_enable(struct mtk_dsi *dsi)
 	mtk_dsi_set_mode(dsi);
 	mtk_dsi_clk_hs_mode(dsi, 1);
 
-	mtk_dsi_start(dsi);
+	if (!dsi->driver_data->command_mode)
+		mtk_dsi_start(dsi);
 
 	dsi->enabled = true;
 }
@@ -908,6 +965,79 @@ void mtk_dsi_ddp_stop(struct device *dev)
 	mtk_dsi_poweroff(dsi);
 }
 
+void mtk_dsi_register_frame_cb(struct device *dev, void (*cb)(void *), void *data)
+{
+	struct mtk_dsi *dsi = dev_get_drvdata(dev);
+	unsigned long flags;
+
+	spin_lock_irqsave(&dsi->frame_lock, flags);
+	dsi->frame_cb_data = data;
+	dsi->frame_cb = cb;
+	spin_unlock_irqrestore(&dsi->frame_lock, flags);
+}
+
+void mtk_dsi_register_te_cb(struct device *dev, void (*cb)(void *), void *data)
+{
+	struct mtk_dsi *dsi = dev_get_drvdata(dev);
+	unsigned long flags;
+
+	spin_lock_irqsave(&dsi->frame_lock, flags);
+	dsi->te_cb_data = data;
+	dsi->te_cb = cb;
+	spin_unlock_irqrestore(&dsi->frame_lock, flags);
+}
+
+bool mtk_dsi_cmd_ready(struct device *dev)
+{
+	struct mtk_dsi *dsi = dev_get_drvdata(dev);
+
+	return READ_ONCE(dsi->enabled) && !READ_ONCE(dsi->frame_pending) &&
+	       !(readl(dsi->regs + DSI_INTSTA) & DSI_BUSY);
+}
+
+void mtk_dsi_cmd_frame(struct device *dev)
+{
+	struct mtk_dsi *dsi = dev_get_drvdata(dev);
+	unsigned long flags;
+
+	mutex_lock(&dsi->transfer_lock);
+	if (!mtk_dsi_cmd_ready(dev))
+		goto out;
+	spin_lock_irqsave(&dsi->frame_lock, flags);
+	/* MT6797 pixel-stream instruction: HS DCS write_memory_start. */
+	writel(0x002c3909, dsi->regs + dsi->driver_data->reg_cmdq_off);
+	writel(1, dsi->regs + DSI_CMDQ_SIZE);
+	mtk_dsi_mask(dsi, DSI_INTSTA, CMD_DONE_INT_FLAG | MT6797_FRAME_DONE_INT_FLAG, 0);
+	dsi->frame_pending = true;
+	dsi->frames_started++;
+	mtk_dsi_start(dsi);
+	spin_unlock_irqrestore(&dsi->frame_lock, flags);
+out:
+	mutex_unlock(&dsi->transfer_lock);
+}
+
+void mtk_dsi_show_command_state(struct seq_file *s, struct device *dev)
+{
+	struct mtk_dsi *dsi = dev_get_drvdata(dev);
+	unsigned long flags;
+	u64 started, done, te;
+	bool pending;
+
+	spin_lock_irqsave(&dsi->frame_lock, flags);
+	started = dsi->frames_started;
+	done = dsi->frames_done;
+	te = dsi->te_events;
+	pending = dsi->frame_pending;
+	spin_unlock_irqrestore(&dsi->frame_lock, flags);
+	seq_printf(s, "DSI: enabled=%u rate=%u pending=%u frames_started=%llu frames_done=%llu\n",
+		   READ_ONCE(dsi->enabled), dsi->data_rate, pending, started, done);
+	seq_printf(s, "TE: external_events=%llu\n", te);
+	seq_printf(s, "INTEN=%08x INTSTA=%08x MODE=%08x TXRX=%08x PSCTRL=%08x\n",
+		   readl(dsi->regs + DSI_INTEN), readl(dsi->regs + DSI_INTSTA),
+		   readl(dsi->regs + DSI_MODE_CTRL), readl(dsi->regs + DSI_TXRX_CTRL),
+		   readl(dsi->regs + DSI_PSCTRL));
+}
+
 static int mtk_dsi_encoder_init(struct drm_device *drm, struct mtk_dsi *dsi)
 {
 	int ret;
@@ -989,6 +1119,7 @@ static int mtk_dsi_host_attach(struct mipi_dsi_host *host,
 	dsi->lanes = device->lanes;
 	dsi->format = device->format;
 	dsi->mode_flags = device->mode_flags;
+	dsi->hs_rate = device->hs_rate;
 	dsi->next_bridge = devm_drm_of_get_bridge(dev, dev->of_node, 0, 0);
 	if (IS_ERR(dsi->next_bridge))
 		return PTR_ERR(dsi->next_bridge);
@@ -1115,6 +1246,7 @@ static ssize_t mtk_dsi_host_transfer(struct mipi_dsi_host *host,
 	u32 dsi_mode;
 	int ret, i;
 
+	mutex_lock(&dsi->transfer_lock);
 	dsi_mode = readl(dsi->regs + DSI_MODE_CTRL);
 	if (dsi_mode & MODE) {
 		mtk_dsi_stop(dsi);
@@ -1171,6 +1303,7 @@ restore_dsi_mode:
 		mtk_dsi_start(dsi);
 	}
 
+	mutex_unlock(&dsi->transfer_lock);
 	return ret < 0 ? ret : recv_cnt;
 }
 
@@ -1193,6 +1326,8 @@ static int mtk_dsi_probe(struct platform_device *pdev)
 		return -ENOMEM;
 
 	dsi->driver_data = of_device_get_match_data(dev);
+	spin_lock_init(&dsi->frame_lock);
+	mutex_init(&dsi->transfer_lock);
 
 	dsi->engine_clk = devm_clk_get(dev, "engine");
 	if (IS_ERR(dsi->engine_clk))
@@ -1222,26 +1357,25 @@ static int mtk_dsi_probe(struct platform_device *pdev)
 	if (irq_num < 0)
 		return irq_num;
 
+	init_waitqueue_head(&dsi->irq_wait_queue);
+	if (dsi->driver_data->command_mode) {
+		writel(0, dsi->regs + DSI_INTEN);
+		writel(0, dsi->regs + DSI_INTSTA);
+	}
+	platform_set_drvdata(pdev, dsi);
+	dsi->bridge.funcs = &mtk_dsi_bridge_funcs;
+	dsi->bridge.of_node = dev->of_node;
+	dsi->bridge.type = DRM_MODE_CONNECTOR_DSI;
+	ret = devm_request_irq(&pdev->dev, irq_num, mtk_dsi_irq,
+			       IRQF_TRIGGER_NONE, dev_name(&pdev->dev), dsi);
+	if (ret)
+		return dev_err_probe(&pdev->dev, ret, "Failed to request DSI irq\n");
+	/* Host registration can synchronously probe a panel and bind the DRM master. */
 	dsi->host.ops = &mtk_dsi_ops;
 	dsi->host.dev = dev;
 	ret = mipi_dsi_host_register(&dsi->host);
 	if (ret < 0)
 		return dev_err_probe(dev, ret, "Failed to register DSI host\n");
-
-	ret = devm_request_irq(&pdev->dev, irq_num, mtk_dsi_irq,
-			       IRQF_TRIGGER_NONE, dev_name(&pdev->dev), dsi);
-	if (ret) {
-		mipi_dsi_host_unregister(&dsi->host);
-		return dev_err_probe(&pdev->dev, ret, "Failed to request DSI irq\n");
-	}
-
-	init_waitqueue_head(&dsi->irq_wait_queue);
-
-	platform_set_drvdata(pdev, dsi);
-
-	dsi->bridge.funcs = &mtk_dsi_bridge_funcs;
-	dsi->bridge.of_node = dev->of_node;
-	dsi->bridge.type = DRM_MODE_CONNECTOR_DSI;
 
 	return 0;
 }
@@ -1253,6 +1387,14 @@ static void mtk_dsi_remove(struct platform_device *pdev)
 	mtk_output_dsi_disable(dsi);
 	mipi_dsi_host_unregister(&dsi->host);
 }
+
+static const struct mtk_dsi_driver_data mt6797_dsi_driver_data = {
+	.reg_cmdq_off = 0x200,
+	.reg_vm_cmd_off = 0x130,
+	.reg_shadow_dbg_off = 0x190,
+	.command_mode = true,
+	.legacy_ps = true,
+};
 
 static const struct mtk_dsi_driver_data mt8173_dsi_driver_data = {
 	.reg_cmdq_off = 0x200,
@@ -1293,6 +1435,7 @@ static const struct mtk_dsi_driver_data mt8188_dsi_driver_data = {
 };
 
 static const struct of_device_id mtk_dsi_of_match[] = {
+	{ .compatible = "mediatek,mt6797-dsi", .data = &mt6797_dsi_driver_data },
 	{ .compatible = "mediatek,mt2701-dsi", .data = &mt2701_dsi_driver_data },
 	{ .compatible = "mediatek,mt8167-dsi", .data = &mt2701_dsi_driver_data },
 	{ .compatible = "mediatek,mt8173-dsi", .data = &mt8173_dsi_driver_data },

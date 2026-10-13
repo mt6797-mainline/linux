@@ -403,6 +403,7 @@ static const struct mtk_disp_rdma_data mt8195_rdma_driver_data = {
 };
 
 static const struct of_device_id mtk_disp_rdma_driver_dt_match[] = {
+	{ .compatible = "mediatek,mt6797-disp-rdma", .data = &mt8173_rdma_driver_data },
 	{ .compatible = "mediatek,mt2701-disp-rdma",
 	  .data = &mt2701_rdma_driver_data},
 	{ .compatible = "mediatek,mt8173-disp-rdma",

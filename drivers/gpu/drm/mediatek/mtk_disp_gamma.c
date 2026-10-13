@@ -45,6 +45,7 @@
 struct mtk_disp_gamma_data {
 	bool has_dither;
 	bool lut_diff;
+	bool null_lut_relay;
 	u16 lut_bank_size;
 	u16 lut_size;
 	u8 lut_bits;
@@ -125,8 +126,14 @@ void mtk_gamma_set(struct device *dev, struct drm_crtc_state *state)
 	unsigned int i;
 
 	/* If there's no gamma lut there's nothing to do here. */
-	if (!state->gamma_lut)
+	if (!state->gamma_lut) {
+		if (gamma->data->null_lut_relay) {
+			cfg_val = readl(gamma->regs + DISP_GAMMA_CFG);
+			cfg_val = (cfg_val & ~GAMMA_LUT_EN) | GAMMA_RELAY_MODE;
+			writel(cfg_val, gamma->regs + DISP_GAMMA_CFG);
+		}
 		return;
+	}
 
 	num_lut_banks = gamma->data->lut_size / gamma->data->lut_bank_size;
 	lut = (struct drm_color_lut *)state->gamma_lut->data;
@@ -217,6 +224,11 @@ void mtk_gamma_config(struct device *dev, unsigned int w,
 	sz |= FIELD_PREP(DISP_GAMMA_SIZE_VSIZE, h);
 
 	mtk_ddp_write(cmdq_pkt, sz, &gamma->cmdq_reg, gamma->regs, DISP_GAMMA_SIZE);
+	/* Establish identity output on MT6797 before any userspace LUT exists. */
+	if (gamma->data->null_lut_relay)
+		mtk_ddp_write_mask(cmdq_pkt, GAMMA_RELAY_MODE, &gamma->cmdq_reg,
+				   gamma->regs, DISP_GAMMA_CFG,
+				   GAMMA_RELAY_MODE | GAMMA_LUT_EN);
 	if (gamma->data && gamma->data->has_dither)
 		mtk_dither_set_common(gamma->regs, &gamma->cmdq_reg, bpc,
 				      DISP_GAMMA_CFG, GAMMA_DITHERING, cmdq_pkt);
@@ -302,6 +314,13 @@ static const struct mtk_disp_gamma_data mt8173_gamma_driver_data = {
 	.lut_size = 512,
 };
 
+static const struct mtk_disp_gamma_data mt6797_gamma_driver_data = {
+	.null_lut_relay = true,
+	.lut_bank_size = 512,
+	.lut_bits = 10,
+	.lut_size = 512,
+};
+
 static const struct mtk_disp_gamma_data mt8183_gamma_driver_data = {
 	.lut_bank_size = 512,
 	.lut_bits = 10,
@@ -317,6 +336,7 @@ static const struct mtk_disp_gamma_data mt8195_gamma_driver_data = {
 };
 
 static const struct of_device_id mtk_disp_gamma_driver_dt_match[] = {
+	{ .compatible = "mediatek,mt6797-disp-gamma", .data = &mt6797_gamma_driver_data },
 	{ .compatible = "mediatek,mt8173-disp-gamma",
 	  .data = &mt8173_gamma_driver_data},
 	{ .compatible = "mediatek,mt8183-disp-gamma",

@@ -207,8 +207,122 @@ ext4 filesystem maintenance state. Basic HS400 mode, known-content reads
 and filesystem write/readback are verified. Long-duration stress, tuning
 repeatability across cold boots and booting a full distro remain untested.
 
-Touchscreen, networking, automatic A53 SMP validation,
-suspend and native panel initialization remain follow-up work. The rich initrd is built from packages
+Native DRM candidate
+--------------------
+
+The new candidate uses the MediaTek DRM component framework with MT6797
+OVL0, OVL0_2L, COLOR, CCORR, AAL, GAMMA, OD, DITHER, RDMA0, UFOE and DSI0.
+MT6797-specific MMSYS routing and mutex module bits are taken from the
+reference ddp_path tables. The mutex uses single-shot SOF for command mode.
+The native MMSYS gate driver controls component clocks. An isolated provider
+reads the firmware MM parent rate without changing the global mux/PLL tree.
+
+The native MT6797 MIPI TX driver programs its S2Q/POSDIV PLL layout and PCW
+change strobe, using a 920 MHz lane rate. The X620 panel driver resets the
+panel through MMSYS LCM_RST_B and replays the actual 378C81 initialization
+commands captured from the owner's LK backup. The reference/vendor DT's
+1440x2560 R63419 template is not this panel. The real panel is 1080x1920,
+68x121 mm, with a nominal 59.07 Hz refresh rate and four DSI lanes.
+Bias rails, external backlight power, PHY voltage/impedance trim and the MM
+power domain currently retain firmware setup. Their power sequencing and
+runtime suspend are not implemented by this candidate.
+
+No IOMMU provider is enabled. The native DRM master selects physical mode
+for the OVL ports in LARB0/LARB5 and uses contiguous DMA GEM allocations
+from a 64 MiB CMA pool. The bring-up DT omits managed power domains and
+IOMMU properties; full upstream board-schema compliance remains follow-up
+work. Register offsets and IRQs are taken from the live stock device tree.
+
+The old x620-lk-refresh node is removed from the board DT. DRM removes the
+firmware framebuffer and creates its own fbdev console. The
+external TE interrupt queues command-mode submissions; it does not
+synthesize vblank events.
+The worker updates planes only while the previous stream is idle and starts
+a memory-write pixel stream through DSI. Only the pixel stream's real
+FRAME_DONE interrupt produces a vblank/page-flip completion. Panel-command
+transfers are serialized against pixel submissions, and queued atomic events
+are separate from the event owned by an in-flight command frame.
+
+The initrd includes modetest. On the phone, collect /dev/dri, fb0/name,
+modetest -M mediatek -c and /sys/kernel/debug/dri/0/mtk_command. The latter
+reports actual DSI submissions/completions and controller register state.
+Hardware acceptance requires a native DRM fbdev console, a visible and
+updating test pattern, and page-flip events from completed DSI transfers.
+Build and QEMU loader/userspace checks cannot establish any of these
+physical display properties.
+
+The first hardware test produced card0 and mediatekdrmfb, and logged native
+panel initialization. The owner captured DSI counters of 2,037 submissions
+and 2,036 completions, then 14,238 and 14,237. The MM parent was IMGPLL at
+325 MHz. fbcon remained black after a green flash. modetest page flips ran
+at 67-68 Hz, with a flickering image that looked like stripes. These results
+confirm binding and real command completions but do not pass display
+acceptance.
+
+The second hardware test confirmed TXRX=0x0001023c and opaque-XRGB
+CON=0x20ff, but still reported no console text and about 68 Hz flips.
+CCORR's diagonal registers were 0x04000000 (identity), GAMMA_CFG was
+0x100 with neither relay nor LUT enabled, and MUTEX_MOD still contained
+LK's unused OVL1_2L/PWM bits. A framebuffer white fill produced only a
+brief white flash; the alpha-zero comparison was not separately reported.
+
+The third candidate queues each submission from the actual external TE
+interrupt, instead of immediately on atomic flush or from a software
+pacing timer. It counts external TE events independently of completed
+pixel streams. MT6797 Gamma now selects relay mode until userspace
+supplies a LUT, and mutex ownership begins with an empty module set
+before adding the native chain. Stable fbcon pixels, test patterns and
+TE-synchronized page flips remain pending hardware validation.
+
+The third hardware log showed zero TE events and zero submitted frames.
+DSI_INTSTA was 0x4 while INTEN was 0x1b. Successive DRM flip_done/commit
+timeouts held framebuffer registration until 64.87 seconds and USB shell
+readiness until 65.28 seconds. The incorrect reused IRQ definition treated
+bit 4 as external TE. MT6797's vendor register definition instead assigns
+TE_RDY to bit 2 and FRAME_DONE to bit 4. The fourth candidate enables both
+bits (INTEN 0x1f), dispatches submissions from bit 2, and completes pixel
+streams from bit 4. CMD_DONE bit 1 remains the panel-command completion.
+This correction is grounded in the stock definition and the captured pending
+bit; hardware visual acceptance is still pending.
+
+The fourth hardware test confirmed 734 external TE events, 716 submitted
+frames and 715 completed frames, with USB shell readiness at 1.323 seconds.
+RGB565 modetest page flips ran at 57.83-58.79 Hz, but the owner saw blue/white
+flicker rather than a stable recognizable pattern. The console remained black.
+The register dump after modetest exited describes the restored XRGB fbcon
+buffer, not the RGB565 test buffer. Timing progress does not establish correct
+pixel scanout.
+
+The fifth candidate corrects another MT8173/MT6797 layout difference: MT6797
+has a separate DITHER block. Calling the integrated OD dither setup replaced
+OD_CFG=1 (relay) with 4. The MT6797 reference ddp_bypass_od() explicitly sets
+OD_CFG=1 and OD_EN=1; only MT6797 now skips the integrated dither setup.
+Read-only diagnostics also include OD, DITHER, UFOE and MMSYS link handshake
+registers.
+
+The fifth hardware test confirmed normal boot console text and a visible
+RGB565 test card. Static modetest without -v displayed the card stably. Page
+flips with -v reported 58.79-58.80 Hz after startup, with 2,104 TE events,
+2,086 submitted frames and 2,085 completions in the captured snapshot.
+OD_CFG read back as 1. libdrm 2.4.124's legacy test_page_flip() alternates the
+initial SMPTE framebuffer with a second UTIL_PATTERN_PLAIN framebuffer,
+so flicker during this particular test is expected content alternation.
+
+These observations pass the initial native DRM/KMS bring-up criteria:
+visible native fbdev console, stable native DMA scanout and page-flip events
+driven by completed DSI transfers. The accepted payload SHA256 is
+``b413e2869f7d502dc2ab4150ac5d2db2d21e2a76b0f0fd7a4385f8511395bd16``.
+This checkpoint still retains firmware MM power, bias/backlight rails and
+PHY trim; it does not establish suspend/resume or complete power management.
+
+The tested pre-DRM HS400 payload is retained at
+artifacts/hs400-001/built/linux-boot.img in the workspace, SHA256
+``2e8f2f8c5822c4cc9589e360c3461a3bf35aece87e41a016401ab76ca331dbe3``.
+
+Touchscreen, networking, suspend and complete display power management remain
+follow-up work. Eight A53 CPUs and native panel initialization have been
+observed in the hardware logs; native DRM scanout is verified as described above.
+The rich initrd is built from packages
 inside a mounted Debian F2FS image, without unpacking a distribution rootfs
 into a loose directory. Compiled terminfo entries for linux, vt100, xterm and
 xterm-256color are included for ncurses applications such as nano.

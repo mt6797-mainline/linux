@@ -163,6 +163,7 @@ def main():
         'usr/bin/dmesg', 'usr/sbin/dropbear', 'usr/bin/dbclient',
         'usr/bin/dropbearkey', 'usr/sbin/mkfs.f2fs', 'usr/sbin/fsck.f2fs',
         'usr/sbin/dump.f2fs', 'usr/sbin/mke2fs', 'usr/sbin/e2fsck',
+        'usr/bin/modetest',
     ]
     # Some Debian tools are installed in /usr/bin rather than /usr/sbin.
     for path in binaries:

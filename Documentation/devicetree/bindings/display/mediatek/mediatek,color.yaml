@@ -23,6 +23,7 @@ properties:
   compatible:
     oneOf:
       - enum:
+          - mediatek,mt6797-disp-color
           - mediatek,mt2701-disp-color
           - mediatek,mt8167-disp-color
           - mediatek,mt8173-disp-color

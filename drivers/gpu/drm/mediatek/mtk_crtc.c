@@ -8,6 +8,7 @@
 #include <linux/mailbox_controller.h>
 #include <linux/of.h>
 #include <linux/pm_runtime.h>
+#include <linux/workqueue.h>
 #include <linux/soc/mediatek/mtk-cmdq.h>
 #include <linux/soc/mediatek/mtk-mmsys.h>
 #include <linux/soc/mediatek/mtk-mutex.h>
@@ -22,6 +23,7 @@
 #include "mtk_crtc.h"
 #include "mtk_ddp_comp.h"
 #include "mtk_drm_drv.h"
+#include "mtk_disp_drv.h"
 #include "mtk_gem.h"
 #include "mtk_plane.h"
 
@@ -44,11 +46,15 @@ struct mtk_crtc {
 
 	bool				pending_needs_vblank;
 	struct drm_pending_vblank_event	*event;
+	struct drm_pending_vblank_event	*command_event;
 
 	struct drm_plane		*planes;
 	unsigned int			layer_nr;
 	bool				pending_planes;
 	bool				pending_async_planes;
+	struct mtk_ddp_comp		*command_output;
+	struct work_struct		command_work;
+	bool				command_vblank_enabled;
 
 #if IS_REACHABLE(CONFIG_MTK_CMDQ)
 	struct cmdq_client		cmdq_client;
@@ -106,6 +112,22 @@ static void mtk_crtc_finish_page_flip(struct mtk_crtc *mtk_crtc)
 	}
 }
 
+static void mtk_crtc_finish_command_event(struct mtk_crtc *mtk_crtc)
+{
+	struct drm_crtc *crtc = &mtk_crtc->base;
+	unsigned long flags;
+
+	spin_lock_irqsave(&mtk_crtc->config_lock, flags);
+	if (mtk_crtc->command_event) {
+		spin_lock(&crtc->dev->event_lock);
+		drm_crtc_send_vblank_event(crtc, mtk_crtc->command_event);
+		drm_crtc_vblank_put(crtc);
+		mtk_crtc->command_event = NULL;
+		spin_unlock(&crtc->dev->event_lock);
+	}
+	spin_unlock_irqrestore(&mtk_crtc->config_lock, flags);
+}
+
 static void mtk_drm_finish_page_flip(struct mtk_crtc *mtk_crtc)
 {
 	unsigned long flags;
@@ -130,6 +152,11 @@ static void mtk_crtc_destroy(struct drm_crtc *crtc)
 	struct mtk_crtc *mtk_crtc = to_mtk_crtc(crtc);
 	int i;
 
+	if (mtk_crtc->command_output) {
+		mtk_dsi_register_te_cb(mtk_crtc->command_output->dev, NULL, NULL);
+		mtk_dsi_register_frame_cb(mtk_crtc->command_output->dev, NULL, NULL);
+	}
+	cancel_work_sync(&mtk_crtc->command_work);
 	mtk_mutex_put(mtk_crtc->mutex);
 #if IS_REACHABLE(CONFIG_MTK_CMDQ)
 	if (mtk_crtc->cmdq_client.chan) {
@@ -385,6 +412,8 @@ static int mtk_crtc_ddp_hw_init(struct mtk_crtc *mtk_crtc)
 		DRM_ERROR("Failed to enable component clocks: %d\n", ret);
 		goto err_mutex_unprepare;
 	}
+	if (mtk_crtc->command_output)
+		mtk_mutex_clear_command_modules(mtk_crtc->mutex);
 
 	for (i = 0; i < mtk_crtc->ddp_comp_nr - 1; i++) {
 		if (!mtk_ddp_comp_connect(mtk_crtc->ddp_comp[i], mtk_crtc->mmsys_dev,
@@ -398,6 +427,8 @@ static int mtk_crtc_ddp_hw_init(struct mtk_crtc *mtk_crtc)
 	}
 	if (!mtk_ddp_comp_add(mtk_crtc->ddp_comp[i], mtk_crtc->mutex))
 		mtk_mutex_add_comp(mtk_crtc->mutex, mtk_crtc->ddp_comp[i]->id);
+	if (mtk_crtc->command_output)
+		mtk_mutex_set_single_mode(mtk_crtc->mutex);
 	mtk_mutex_enable(mtk_crtc->mutex);
 
 	for (i = 0; i < mtk_crtc->ddp_comp_nr; i++) {
@@ -552,6 +583,51 @@ static void mtk_crtc_ddp_config(struct drm_crtc *crtc,
 	}
 }
 
+static void mtk_crtc_command_work(struct work_struct *work)
+{
+	struct mtk_crtc *crtc = container_of(work, struct mtk_crtc, command_work);
+	unsigned long flags;
+
+	mutex_lock(&crtc->hw_lock);
+	/* Never reprogram planes while the previous command frame is reading them. */
+	if (!READ_ONCE(crtc->enabled) || !mtk_dsi_cmd_ready(crtc->command_output->dev))
+		goto out;
+	spin_lock_irqsave(&crtc->config_lock, flags);
+	if (crtc->command_event) {
+		spin_unlock_irqrestore(&crtc->config_lock, flags);
+		goto out;
+	}
+	crtc->config_updating = true;
+	spin_unlock_irqrestore(&crtc->config_lock, flags);
+	mtk_crtc_ddp_config(&crtc->base, NULL);
+	spin_lock_irqsave(&crtc->config_lock, flags);
+	if (crtc->pending_needs_vblank) {
+		/* Transfer ownership to this frame; a later atomic_begin queues another event. */
+		spin_lock(&crtc->base.dev->event_lock);
+		crtc->command_event = crtc->event;
+		crtc->event = NULL;
+		spin_unlock(&crtc->base.dev->event_lock);
+		crtc->pending_needs_vblank = false;
+	}
+	crtc->config_updating = false;
+	spin_unlock_irqrestore(&crtc->config_lock, flags);
+	/* TE paces transfers; DSI's FRAME_DONE IRQ produces a vblank. */
+	wmb();
+	mtk_mutex_enable(crtc->mutex);
+	mtk_dsi_cmd_frame(crtc->command_output->dev);
+out:
+	mutex_unlock(&crtc->hw_lock);
+}
+
+static void mtk_crtc_command_te(void *data)
+{
+	struct mtk_crtc *crtc = to_mtk_crtc(data);
+
+	if (!READ_ONCE(crtc->enabled))
+		return;
+	queue_work(system_highpri_wq, &crtc->command_work);
+}
+
 static void mtk_crtc_update_config(struct mtk_crtc *mtk_crtc, bool needs_vblank)
 {
 #if IS_REACHABLE(CONFIG_MTK_CMDQ)
@@ -591,6 +667,13 @@ static void mtk_crtc_update_config(struct mtk_crtc *mtk_crtc, bool needs_vblank)
 		mtk_crtc->pending_planes = true;
 	if (pending_async_planes)
 		mtk_crtc->pending_async_planes = true;
+	if (mtk_crtc->command_output) {
+		spin_lock_irqsave(&mtk_crtc->config_lock, flags);
+		mtk_crtc->config_updating = false;
+		spin_unlock_irqrestore(&mtk_crtc->config_lock, flags);
+		mutex_unlock(&mtk_crtc->hw_lock);
+		return;
+	}
 
 	if (priv->data->shadow_register) {
 		mtk_mutex_acquire(mtk_crtc->mutex);
@@ -646,6 +729,12 @@ static void mtk_crtc_ddp_irq(void *data)
 	struct mtk_crtc *mtk_crtc = to_mtk_crtc(crtc);
 	struct mtk_drm_private *priv = crtc->dev->dev_private;
 
+	if (mtk_crtc->command_output) {
+		if (READ_ONCE(mtk_crtc->command_vblank_enabled))
+			drm_crtc_handle_vblank(crtc);
+		mtk_crtc_finish_command_event(mtk_crtc);
+		return;
+	}
 #if IS_REACHABLE(CONFIG_MTK_CMDQ)
 	if (!priv->data->shadow_register && !mtk_crtc->cmdq_client.chan)
 		mtk_crtc_ddp_config(crtc, NULL);
@@ -664,6 +753,10 @@ static int mtk_crtc_enable_vblank(struct drm_crtc *crtc)
 	struct mtk_crtc *mtk_crtc = to_mtk_crtc(crtc);
 	struct mtk_ddp_comp *comp = mtk_crtc->ddp_comp[0];
 
+	if (mtk_crtc->command_output) {
+		WRITE_ONCE(mtk_crtc->command_vblank_enabled, true);
+		return 0;
+	}
 	mtk_ddp_comp_enable_vblank(comp);
 
 	return 0;
@@ -674,6 +767,10 @@ static void mtk_crtc_disable_vblank(struct drm_crtc *crtc)
 	struct mtk_crtc *mtk_crtc = to_mtk_crtc(crtc);
 	struct mtk_ddp_comp *comp = mtk_crtc->ddp_comp[0];
 
+	if (mtk_crtc->command_output) {
+		WRITE_ONCE(mtk_crtc->command_vblank_enabled, false);
+		return;
+	}
 	mtk_ddp_comp_disable_vblank(comp);
 }
 
@@ -830,6 +927,12 @@ static void mtk_crtc_atomic_disable(struct drm_crtc *crtc,
 	/* Wait for planes to be disabled */
 	drm_crtc_wait_one_vblank(crtc);
 
+	if (mtk_crtc->command_output) {
+		WRITE_ONCE(mtk_crtc->enabled, false);
+		cancel_work_sync(&mtk_crtc->command_work);
+		/* A disabled CRTC must not carry an unsent frame event into its next enable. */
+		mtk_crtc_finish_command_event(mtk_crtc);
+	}
 	drm_crtc_vblank_off(crtc);
 	mtk_crtc_ddp_hw_fini(mtk_crtc);
 	mtk_ddp_comp_power_off(comp);
@@ -1045,6 +1148,9 @@ int mtk_crtc_create(struct drm_device *drm_dev, const unsigned int *path,
 	mtk_crtc = devm_kzalloc(dev, sizeof(*mtk_crtc), GFP_KERNEL);
 	if (!mtk_crtc)
 		return -ENOMEM;
+	mutex_init(&mtk_crtc->hw_lock);
+	spin_lock_init(&mtk_crtc->config_lock);
+	INIT_WORK(&mtk_crtc->command_work, mtk_crtc_command_work);
 
 	mtk_crtc->mmsys_dev = priv->mmsys_dev;
 	mtk_crtc->ddp_comp_nr = path_len;
@@ -1081,8 +1187,16 @@ int mtk_crtc_create(struct drm_device *drm_dev, const unsigned int *path,
 				has_ctm = true;
 		}
 
-		mtk_ddp_comp_register_vblank_cb(comp, mtk_crtc_ddp_irq,
-						&mtk_crtc->base);
+		if (!priv->data->command_mode)
+			mtk_ddp_comp_register_vblank_cb(comp, mtk_crtc_ddp_irq,
+						      &mtk_crtc->base);
+	}
+	if (priv->data->command_mode) {
+		mtk_crtc->command_output = mtk_crtc->ddp_comp[mtk_crtc->ddp_comp_nr - 1];
+		mtk_dsi_register_frame_cb(mtk_crtc->command_output->dev, mtk_crtc_ddp_irq,
+					 &mtk_crtc->base);
+		mtk_dsi_register_te_cb(mtk_crtc->command_output->dev, mtk_crtc_command_te,
+				      &mtk_crtc->base);
 	}
 
 	for (i = 0; i < mtk_crtc->ddp_comp_nr; i++)
@@ -1113,8 +1227,6 @@ int mtk_crtc_create(struct drm_device *drm_dev, const unsigned int *path,
 	if (gamma_lut_size)
 		drm_mode_crtc_set_gamma_size(&mtk_crtc->base, gamma_lut_size);
 	drm_crtc_enable_color_mgmt(&mtk_crtc->base, 0, has_ctm, gamma_lut_size);
-	mutex_init(&mtk_crtc->hw_lock);
-	spin_lock_init(&mtk_crtc->config_lock);
 
 #if IS_REACHABLE(CONFIG_MTK_CMDQ)
 	i = priv->mbox_index++;

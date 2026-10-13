@@ -24,6 +24,7 @@ properties:
   compatible:
     oneOf:
       - enum:
+          - mediatek,mt6797-disp-rdma
           - mediatek,mt2701-disp-rdma
           - mediatek,mt8173-disp-rdma
           - mediatek,mt8183-disp-rdma

@@ -150,6 +150,7 @@ struct mtk_disp_ovl_data {
 	const u32 *formats;
 	size_t num_formats;
 	bool supports_clrfmt_ext;
+	bool opaque_xrgb_no_alpha;
 };
 
 /*
@@ -530,6 +531,10 @@ void mtk_ovl_layer_config(struct device *dev, unsigned int idx,
 		 */
 		if (blend_mode == DRM_MODE_BLEND_PIXEL_NONE || !state->base.fb->format->has_alpha)
 			ignore_pixel_alpha = OVL_CONST_BLEND;
+		/* MT6797's retained-console test proved AEN must be off for opaque XRGB. */
+		if (ovl->data->opaque_xrgb_no_alpha &&
+		    !state->base.fb->format->has_alpha && state->base.alpha == DRM_BLEND_ALPHA_OPAQUE)
+			con &= ~OVL_CON_AEN;
 	}
 
 	/*
@@ -641,6 +646,12 @@ static int mtk_disp_ovl_probe(struct platform_device *pdev)
 
 	priv->data = of_device_get_match_data(dev);
 	platform_set_drvdata(pdev, priv);
+	if (of_device_is_compatible(dev->of_node, "mediatek,mt6797-disp-ovl") ||
+	    of_device_is_compatible(dev->of_node, "mediatek,mt6797-disp-ovl-2l")) {
+		/* Command-mode vblank comes from DSI; discard LK's interrupt enables. */
+		writel(0, priv->regs + DISP_REG_OVL_INTEN);
+		writel(0, priv->regs + DISP_REG_OVL_INTSTA);
+	}
 
 	ret = devm_request_irq(dev, irq, mtk_disp_ovl_irq_handler,
 			       IRQF_TRIGGER_NONE, dev_name(dev), priv);
@@ -680,6 +691,26 @@ static const struct mtk_disp_ovl_data mt8173_ovl_driver_data = {
 	.fmt_rgb565_is_0 = true,
 	.formats = mt8173_formats,
 	.num_formats = ARRAY_SIZE(mt8173_formats),
+};
+
+static const struct mtk_disp_ovl_data mt6797_ovl_driver_data = {
+	.addr = DISP_REG_OVL_ADDR_MT8173,
+	.gmc_bits = 8,
+	.layer_nr = 4,
+	.fmt_rgb565_is_0 = true,
+	.formats = mt8173_formats,
+	.num_formats = ARRAY_SIZE(mt8173_formats),
+	.opaque_xrgb_no_alpha = true,
+};
+
+static const struct mtk_disp_ovl_data mt6797_ovl_2l_driver_data = {
+	.addr = DISP_REG_OVL_ADDR_MT8173,
+	.gmc_bits = 8,
+	.layer_nr = 2,
+	.fmt_rgb565_is_0 = true,
+	.formats = mt8173_formats,
+	.num_formats = ARRAY_SIZE(mt8173_formats),
+	.opaque_xrgb_no_alpha = true,
 };
 
 static const struct mtk_disp_ovl_data mt8183_ovl_driver_data = {
@@ -742,6 +773,8 @@ static const struct mtk_disp_ovl_data mt8195_ovl_driver_data = {
 };
 
 static const struct of_device_id mtk_disp_ovl_driver_dt_match[] = {
+	{ .compatible = "mediatek,mt6797-disp-ovl", .data = &mt6797_ovl_driver_data },
+	{ .compatible = "mediatek,mt6797-disp-ovl-2l", .data = &mt6797_ovl_2l_driver_data },
 	{ .compatible = "mediatek,mt2701-disp-ovl",
 	  .data = &mt2701_ovl_driver_data},
 	{ .compatible = "mediatek,mt8173-disp-ovl",

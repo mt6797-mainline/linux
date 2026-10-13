@@ -48,6 +48,12 @@ void mtk_dpi_stop(struct device *dev);
 unsigned int mtk_dpi_encoder_index(struct device *dev);
 
 void mtk_dsi_ddp_start(struct device *dev);
+bool mtk_dsi_cmd_ready(struct device *dev);
+void mtk_dsi_cmd_frame(struct device *dev);
+void mtk_dsi_register_frame_cb(struct device *dev, void (*cb)(void *), void *data);
+void mtk_dsi_register_te_cb(struct device *dev, void (*cb)(void *), void *data);
+struct seq_file;
+void mtk_dsi_show_command_state(struct seq_file *s, struct device *dev);
 void mtk_dsi_ddp_stop(struct device *dev);
 unsigned int mtk_dsi_encoder_index(struct device *dev);
 

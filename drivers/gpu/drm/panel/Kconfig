@@ -995,4 +995,11 @@ config DRM_PANEL_XINPENG_XPP055C272
 	  Say Y here if you want to enable support for the Xinpeng
 	  XPP055C272 controller for 720x1280 LCD panels with MIPI/RGB/SPI
 	  system interfaces.
+config DRM_PANEL_LEECO_X620
+	tristate "LeEco X620 378C81 command-mode panel"
+	depends on OF && DRM_MIPI_DSI && MFD_SYSCON
+	help
+	  Native reset and DSI initialization of the X620 panel. Bias rails and
+	  external backlight power currently retain firmware configuration.
+
 endmenu

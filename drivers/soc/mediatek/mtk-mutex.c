@@ -392,6 +392,25 @@ static const u8 mt8167_mutex_mod[DDP_COMPONENT_ID_MAX] = {
 	[DDP_COMPONENT_WDMA0] = MT8167_MUTEX_MOD_DISP_WDMA0,
 };
 
+static const u8 mt6797_mutex_mod[DDP_COMPONENT_ID_MAX] = {
+	[DDP_COMPONENT_OVL0] = 10,
+	[DDP_COMPONENT_OVL1] = 11,
+	[DDP_COMPONENT_OVL_2L0] = 12,
+	[DDP_COMPONENT_OVL_2L1] = 15,
+	[DDP_COMPONENT_RDMA0] = 13,
+	[DDP_COMPONENT_RDMA1] = 14,
+	[DDP_COMPONENT_WDMA0] = 16,
+	[DDP_COMPONENT_WDMA1] = 17,
+	[DDP_COMPONENT_COLOR0] = 18,
+	[DDP_COMPONENT_CCORR] = 19,
+	[DDP_COMPONENT_AAL0] = 20,
+	[DDP_COMPONENT_GAMMA] = 21,
+	[DDP_COMPONENT_OD0] = 22,
+	[DDP_COMPONENT_DITHER0] = 23,
+	[DDP_COMPONENT_UFOE] = 24,
+	[DDP_COMPONENT_PWM0] = 26,
+};
+
 static const u8 mt8173_mutex_mod[DDP_COMPONENT_ID_MAX] = {
 	[DDP_COMPONENT_AAL0] = MT8173_MUTEX_MOD_DISP_AAL,
 	[DDP_COMPONENT_COLOR0] = MT8173_MUTEX_MOD_DISP_COLOR0,
@@ -739,6 +758,14 @@ static const struct mtk_mutex_data mt8167_mutex_driver_data = {
 	.no_clk = true,
 };
 
+static const struct mtk_mutex_data mt6797_mutex_driver_data = {
+	.mutex_mod = mt6797_mutex_mod,
+	.mutex_sof = mt2712_mutex_sof,
+	.mutex_mod_reg = MT2701_MUTEX0_MOD0,
+	.mutex_sof_reg = MT2701_MUTEX0_SOF0,
+	.no_clk = true,
+};
+
 static const struct mtk_mutex_data mt8173_mutex_driver_data = {
 	.mutex_mod = mt8173_mutex_mod,
 	.mutex_sof = mt2712_mutex_sof,
@@ -964,6 +991,29 @@ void mtk_mutex_enable(struct mtk_mutex *mutex)
 }
 EXPORT_SYMBOL_GPL(mtk_mutex_enable);
 
+void mtk_mutex_set_single_mode(struct mtk_mutex *mutex)
+{
+	struct mtk_mutex_ctx *mtx = container_of(mutex, struct mtk_mutex_ctx,
+						 mutex[mutex->id]);
+
+	writel(MUTEX_SOF_SINGLE_MODE, mtx->regs +
+	       DISP_REG_MUTEX_SOF(mtx->data->mutex_sof_reg, mutex->id));
+}
+EXPORT_SYMBOL_GPL(mtk_mutex_set_single_mode);
+
+void mtk_mutex_clear_command_modules(struct mtk_mutex *mutex)
+{
+	struct mtk_mutex_ctx *mtx = container_of(mutex, struct mtk_mutex_ctx,
+						 mutex[mutex->id]);
+
+	/* MT6797 command-mode ownership starts with an empty 32-bit module set. */
+	writel(0, mtx->regs + DISP_REG_MUTEX_EN(mutex->id));
+	writel(0, mtx->regs + DISP_REG_MUTEX_MOD(mtx->data->mutex_mod_reg, mutex->id));
+	writel(MUTEX_SOF_SINGLE_MODE, mtx->regs +
+	       DISP_REG_MUTEX_SOF(mtx->data->mutex_sof_reg, mutex->id));
+}
+EXPORT_SYMBOL_GPL(mtk_mutex_clear_command_modules);
+
 int mtk_mutex_enable_by_cmdq(struct mtk_mutex *mutex, void *pkt)
 {
 	struct mtk_mutex_ctx *mtx = container_of(mutex, struct mtk_mutex_ctx,
@@ -1127,6 +1177,7 @@ static int mtk_mutex_probe(struct platform_device *pdev)
 }
 
 static const struct of_device_id mutex_driver_dt_match[] = {
+	{ .compatible = "mediatek,mt6797-disp-mutex", .data = &mt6797_mutex_driver_data },
 	{ .compatible = "mediatek,mt2701-disp-mutex", .data = &mt2701_mutex_driver_data },
 	{ .compatible = "mediatek,mt2712-disp-mutex", .data = &mt2712_mutex_driver_data },
 	{ .compatible = "mediatek,mt6795-disp-mutex", .data = &mt6795_mutex_driver_data },

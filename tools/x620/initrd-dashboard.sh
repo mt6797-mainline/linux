@@ -4,7 +4,11 @@ frame=0
 while true; do
     frame=$((frame + 1))
     printf '\033[2J\033[H'
-    printf '\033[1;36mLINUX 6.12 / SIMPLEFB\033[0m\n'
+    if test -c /dev/dri/card0; then
+        printf '\033[1;36mLINUX 6.12 / MEDIATEK DRM\033[0m\n'
+    else
+        printf '\033[1;36mLINUX 6.12 / SIMPLEFB\033[0m\n'
+    fi
     echo 'LeEco X620 -- diagnostic initrd'
     echo '=============================================='
     echo 'X620_INITRD_READY -- PID 1 has entered userspace'

@@ -64,6 +64,7 @@ struct mtk_ddp_comp_dev {
 	struct clk *clk;
 	void __iomem *regs;
 	struct cmdq_client_reg cmdq_reg;
+	bool od_has_dither;
 };
 
 void mtk_ddp_write(struct cmdq_pkt *cmdq_pkt, unsigned int value,
@@ -225,7 +226,9 @@ static void mtk_od_config(struct device *dev, unsigned int w,
 
 	mtk_ddp_write(cmdq_pkt, w << 16 | h, &priv->cmdq_reg, priv->regs, DISP_REG_OD_SIZE);
 	mtk_ddp_write(cmdq_pkt, OD_RELAYMODE, &priv->cmdq_reg, priv->regs, DISP_REG_OD_CFG);
-	mtk_dither_set(dev, bpc, DISP_REG_OD_CFG, cmdq_pkt);
+	/* MT6797 has a separate DITHER block; its OD bypass requires CFG = 1. */
+	if (priv->od_has_dither)
+		mtk_dither_set(dev, bpc, DISP_REG_OD_CFG, cmdq_pkt);
 }
 
 static void mtk_od_start(struct device *dev)
@@ -685,6 +688,7 @@ int mtk_ddp_comp_init(struct device *dev, struct device_node *node, struct mtk_d
 	priv = devm_kzalloc(dev, sizeof(*priv), GFP_KERNEL);
 	if (!priv)
 		return -ENOMEM;
+	priv->od_has_dither = !of_device_is_compatible(node, "mediatek,mt6797-disp-od");
 
 	priv->regs = devm_of_iomap(dev, node, 0, NULL);
 	if (IS_ERR(priv->regs))

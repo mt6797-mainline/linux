@@ -23,6 +23,7 @@ properties:
   compatible:
     oneOf:
       - enum:
+          - mediatek,mt6797-dsi
           - mediatek,mt2701-dsi
           - mediatek,mt7623-dsi
           - mediatek,mt8167-dsi

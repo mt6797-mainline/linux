@@ -8,13 +8,18 @@
 #include <linux/module.h>
 #include <linux/of.h>
 #include <linux/of_platform.h>
+#include <linux/of_address.h>
 #include <linux/platform_device.h>
 #include <linux/pm_runtime.h>
 #include <linux/dma-mapping.h>
+#include <linux/mfd/syscon.h>
+#include <linux/regmap.h>
 
+#include <drm/drm_aperture.h>
 #include <drm/drm_atomic.h>
 #include <drm/drm_atomic_helper.h>
 #include <drm/drm_drv.h>
+#include <drm/drm_debugfs.h>
 #include <drm/drm_fbdev_dma.h>
 #include <drm/drm_fourcc.h>
 #include <drm/drm_gem.h>
@@ -27,6 +32,7 @@
 #include "mtk_crtc.h"
 #include "mtk_ddp_comp.h"
 #include "mtk_drm_drv.h"
+#include "mtk_disp_drv.h"
 #include "mtk_gem.h"
 
 #define DRIVER_NAME "mediatek"
@@ -118,6 +124,20 @@ static unsigned int mt8167_mtk_ddp_main[] = {
 	DDP_COMPONENT_GAMMA,
 	DDP_COMPONENT_DITHER0,
 	DDP_COMPONENT_RDMA0,
+	DDP_COMPONENT_DSI0,
+};
+
+static const unsigned int mt6797_mtk_ddp_main[] = {
+	DDP_COMPONENT_OVL0,
+	DDP_COMPONENT_OVL_2L0,
+	DDP_COMPONENT_COLOR0,
+	DDP_COMPONENT_CCORR,
+	DDP_COMPONENT_AAL0,
+	DDP_COMPONENT_GAMMA,
+	DDP_COMPONENT_OD0,
+	DDP_COMPONENT_DITHER0,
+	DDP_COMPONENT_RDMA0,
+	DDP_COMPONENT_UFOE,
 	DDP_COMPONENT_DSI0,
 };
 
@@ -264,6 +284,13 @@ static const struct mtk_mmsys_driver_data mt8167_mmsys_driver_data = {
 	.mmsys_dev_num = 1,
 };
 
+static const struct mtk_mmsys_driver_data mt6797_mmsys_driver_data = {
+	.main_path = mt6797_mtk_ddp_main,
+	.main_len = ARRAY_SIZE(mt6797_mtk_ddp_main),
+	.mmsys_dev_num = 1,
+	.command_mode = true,
+};
+
 static const struct mtk_mmsys_driver_data mt8173_mmsys_driver_data = {
 	.main_path = mt8173_mtk_ddp_main,
 	.main_len = ARRAY_SIZE(mt8173_mtk_ddp_main),
@@ -327,6 +354,8 @@ static const struct mtk_mmsys_driver_data mt8195_vdosys1_driver_data = {
 };
 
 static const struct of_device_id mtk_drm_of_ids[] = {
+	{ .compatible = "mediatek,mt6797-mmsys",
+	  .data = &mt6797_mmsys_driver_data },
 	{ .compatible = "mediatek,mt2701-mmsys",
 	  .data = &mt2701_mmsys_driver_data},
 	{ .compatible = "mediatek,mt7623-mmsys",
@@ -610,6 +639,87 @@ static struct drm_gem_object *mtk_gem_prime_import(struct drm_device *dev,
 	return drm_gem_prime_import_dev(dev, dma_buf, private->dma_dev);
 }
 
+static void mtk_drm_show_registers(struct seq_file *s, struct device_node *node,
+				  const char *name, const u16 *offsets, size_t count)
+{
+	void __iomem *regs;
+	int i;
+
+	regs = of_iomap(node, 0);
+	if (!regs)
+		return;
+	seq_printf(s, "%s:", name);
+	for (i = 0; i < count; i++)
+		seq_printf(s, " %03x=%08x", offsets[i], readl(regs + offsets[i]));
+	seq_putc(s, '\n');
+	iounmap(regs);
+}
+
+static int mtk_drm_command_show(struct seq_file *s, void *unused)
+{
+	struct drm_info_node *node = s->private;
+	struct mtk_drm_private *private = node->minor->dev->dev_private;
+
+	if (private->data->command_mode) {
+		static const u16 ovl_regs[] = {
+			0x00c, 0x020, 0x024, 0x02c, 0x030, 0x038,
+			0x040, 0x044, 0x0c0, 0x240, 0xf40,
+		};
+		static const u16 rdma_regs[] = { 0x010, 0x014, 0x018, 0x040, 0x050, 0x054 };
+		static const u16 color_regs[] = { 0x000, 0x010, 0x020, 0x030, 0x080, 0x088, 0x090 };
+		static const u16 od_regs[] = { 0x000, 0x010, 0x020, 0x030 };
+		static const u16 dither_regs[] = {
+			0x000, 0x010, 0x020, 0x030, 0x100, 0x118, 0x13c, 0x140,
+		};
+		static const u16 ufoe_regs[] = { 0x000, 0x004, 0x050, 0x054 };
+		static const u16 route_regs[] = {
+			0x034, 0x03c, 0x040, 0x068, 0x074, 0x07c,
+			0x088, 0x08c, 0x090, 0x098, 0x09c, 0x100, 0x110,
+			0x8a0, 0x8a4, 0x8a8, 0x8ac, 0x8c0,
+		};
+		static const u16 mutex_regs[] = { 0x020, 0x024, 0x02c, 0x030 };
+		static const unsigned int stages[] = {
+			DDP_COMPONENT_CCORR, DDP_COMPONENT_AAL0, DDP_COMPONENT_GAMMA,
+		};
+		int i;
+
+		mtk_dsi_show_command_state(s, private->ddp_comp[DDP_COMPONENT_DSI0].dev);
+		mtk_drm_show_registers(s, private->comp_node[DDP_COMPONENT_OVL0],
+				       "OVL0", ovl_regs, ARRAY_SIZE(ovl_regs));
+		mtk_drm_show_registers(s, private->comp_node[DDP_COMPONENT_OVL_2L0],
+				       "OVL0_2L", ovl_regs, ARRAY_SIZE(ovl_regs));
+		mtk_drm_show_registers(s, private->comp_node[DDP_COMPONENT_RDMA0],
+				       "RDMA0", rdma_regs, ARRAY_SIZE(rdma_regs));
+		for (i = 0; i < ARRAY_SIZE(stages); i++) {
+			struct device_node *component = private->comp_node[stages[i]];
+
+			mtk_drm_show_registers(s, component, component->name,
+					       color_regs, ARRAY_SIZE(color_regs));
+		}
+		mtk_drm_show_registers(s, private->comp_node[DDP_COMPONENT_OD0],
+				       "OD", od_regs, ARRAY_SIZE(od_regs));
+		mtk_drm_show_registers(s, private->comp_node[DDP_COMPONENT_DITHER0],
+				       "DITHER", dither_regs, ARRAY_SIZE(dither_regs));
+		mtk_drm_show_registers(s, private->comp_node[DDP_COMPONENT_UFOE],
+				       "UFOE", ufoe_regs, ARRAY_SIZE(ufoe_regs));
+		mtk_drm_show_registers(s, private->mmsys_dev->of_node,
+				       "MMSYS", route_regs, ARRAY_SIZE(route_regs));
+		mtk_drm_show_registers(s, private->mutex_node,
+				       "MUTEX", mutex_regs, ARRAY_SIZE(mutex_regs));
+	}
+	return 0;
+}
+
+static const struct drm_info_list mtk_drm_command_info[] = {
+	{ "mtk_command", mtk_drm_command_show, 0 },
+};
+
+static void mtk_drm_debugfs_init(struct drm_minor *minor)
+{
+	drm_debugfs_create_files(mtk_drm_command_info, ARRAY_SIZE(mtk_drm_command_info),
+				 minor->debugfs_root, minor);
+}
+
 static const struct drm_driver mtk_drm_driver = {
 	.driver_features = DRIVER_MODESET | DRIVER_GEM | DRIVER_ATOMIC,
 
@@ -618,6 +728,7 @@ static const struct drm_driver mtk_drm_driver = {
 	.gem_prime_import = mtk_gem_prime_import,
 	.gem_prime_import_sg_table = mtk_gem_prime_import_sg_table,
 	.fops = &mtk_drm_fops,
+	.debugfs_init = mtk_drm_debugfs_init,
 
 	.name = DRIVER_NAME,
 	.desc = DRIVER_DESC,
@@ -629,6 +740,30 @@ static const struct drm_driver mtk_drm_driver = {
 static int compare_dev(struct device *dev, void *data)
 {
 	return dev == (struct device *)data;
+}
+
+static int mt6797_drm_prepare_physical_dma(struct mtk_drm_private *private)
+{
+	struct device_node *node = private->mmsys_dev->of_node;
+	struct regmap *larb;
+	const char * const names[] = { "mediatek,larb0", "mediatek,larb5" };
+	u32 masks[] = { BIT(0) | BIT(1), BIT(6) };
+	int i, ret;
+
+	if (!of_device_is_compatible(node, "mediatek,mt6797-mmsys") ||
+	    of_find_property(private->comp_node[DDP_COMPONENT_OVL0], "iommus", NULL))
+		return 0;
+	/* No IOMMU provider yet: use physical, contiguous GEM DMA allocations. */
+	for (i = 0; i < ARRAY_SIZE(names); i++) {
+		larb = syscon_regmap_lookup_by_phandle(node, names[i]);
+		if (IS_ERR(larb))
+			return PTR_ERR(larb);
+		ret = regmap_update_bits(larb, 0xfc0, masks[i], 0);
+		if (ret)
+			return ret;
+	}
+	dev_info(private->dev, "MT6797 OVL DMA: physical mode, contiguous buffers\n");
+	return 0;
 }
 
 static int mtk_drm_bind(struct device *dev)
@@ -649,6 +784,9 @@ static int mtk_drm_bind(struct device *dev)
 	private->mutex_dev = &pdev->dev;
 	private->mtk_drm_bound = true;
 	private->dev = dev;
+	ret = mt6797_drm_prepare_physical_dma(private);
+	if (ret)
+		goto err_put_dev;
 
 	if (!mtk_drm_get_all_drm_priv(dev))
 		return 0;
@@ -667,6 +805,11 @@ static int mtk_drm_bind(struct device *dev)
 	ret = mtk_drm_kms_init(drm);
 	if (ret < 0)
 		goto err_free;
+	if (private->data->command_mode) {
+		ret = drm_aperture_remove_framebuffers(&mtk_drm_driver);
+		if (ret)
+			goto err_deinit;
+	}
 
 	ret = drm_dev_register(drm, 0);
 	if (ret < 0)
@@ -710,6 +853,18 @@ static const struct component_master_ops mtk_drm_ops = {
 };
 
 static const struct of_device_id mtk_ddp_comp_dt_ids[] = {
+	{ .compatible = "mediatek,mt6797-disp-ovl", .data = (void *)MTK_DISP_OVL },
+	{ .compatible = "mediatek,mt6797-disp-ovl-2l", .data = (void *)MTK_DISP_OVL_2L },
+	{ .compatible = "mediatek,mt6797-disp-color", .data = (void *)MTK_DISP_COLOR },
+	{ .compatible = "mediatek,mt6797-disp-ccorr", .data = (void *)MTK_DISP_CCORR },
+	{ .compatible = "mediatek,mt6797-disp-aal", .data = (void *)MTK_DISP_AAL },
+	{ .compatible = "mediatek,mt6797-disp-gamma", .data = (void *)MTK_DISP_GAMMA },
+	{ .compatible = "mediatek,mt6797-disp-od", .data = (void *)MTK_DISP_OD },
+	{ .compatible = "mediatek,mt6797-disp-dither", .data = (void *)MTK_DISP_DITHER },
+	{ .compatible = "mediatek,mt6797-disp-rdma", .data = (void *)MTK_DISP_RDMA },
+	{ .compatible = "mediatek,mt6797-disp-ufoe", .data = (void *)MTK_DISP_UFOE },
+	{ .compatible = "mediatek,mt6797-disp-mutex", .data = (void *)MTK_DISP_MUTEX },
+	{ .compatible = "mediatek,mt6797-dsi", .data = (void *)MTK_DSI },
 	{ .compatible = "mediatek,mt8167-disp-aal",
 	  .data = (void *)MTK_DISP_AAL},
 	{ .compatible = "mediatek,mt8173-disp-aal",
