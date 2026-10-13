@@ -534,6 +534,14 @@ static const struct mtk_mmc_compatible mt6795_compat = {
 	.support_64g = false,
 };
 
+/* MT6797 reference: 12-bit divider, PAD_TUNE0 and async response/data paths. */
+static const struct mtk_mmc_compatible mt6797_compat = {
+	.clk_div_bits = 12,
+	.pad_tune_reg = MSDC_PAD_TUNE0,
+	.async_fifo = true,
+	.data_tune = true,
+};
+
 static const struct mtk_mmc_compatible mt7620_compat = {
 	.clk_div_bits = 8,
 	.recheck_sdio_irq = true,
@@ -628,6 +636,7 @@ static const struct of_device_id msdc_of_ids[] = {
 	{ .compatible = "mediatek,mt2712-mmc", .data = &mt2712_compat},
 	{ .compatible = "mediatek,mt6779-mmc", .data = &mt6779_compat},
 	{ .compatible = "mediatek,mt6795-mmc", .data = &mt6795_compat},
+	{ .compatible = "mediatek,mt6797-mmc", .data = &mt6797_compat},
 	{ .compatible = "mediatek,mt7620-mmc", .data = &mt7620_compat},
 	{ .compatible = "mediatek,mt7622-mmc", .data = &mt7622_compat},
 	{ .compatible = "mediatek,mt7986-mmc", .data = &mt7986_compat},
@@ -960,7 +969,12 @@ static void msdc_set_mclk(struct msdc_host *host, unsigned char timing, u32 hz)
 			      (mode << 12) | div);
 
 	clk_prepare_enable(host->src_clk_cg);
-	readl_poll_timeout(host->base + MSDC_CFG, val, (val & MSDC_CFG_CKSTB), 0, 0);
+	if (readl_poll_timeout(host->base + MSDC_CFG, val,
+			      (val & MSDC_CFG_CKSTB), 1, 20000)) {
+		dev_err(host->dev, "clock did not stabilize at %u Hz\n", hz);
+		sdr_set_bits(host->base + MSDC_INTEN, flags);
+		return;
+	}
 	sdr_set_bits(host->base + MSDC_CFG, MSDC_CFG_CKPDN);
 	mmc->actual_clock = sclk;
 	host->mclk = hz;
@@ -1829,6 +1843,16 @@ static void msdc_init_hw(struct msdc_host *host)
 		else
 			sdr_set_bits(host->base + tune_reg,
 				     MSDC_PAD_TUNE_RXDLYSEL);
+	}
+
+	if (host->dev_comp == &mt6797_compat) {
+		/* Low-speed defaults from MT6797 msdc_init_tune_setting/autok_path_sel. */
+		sdr_set_field(host->base + MSDC_PATCH_BIT, MSDC_CKGEN_MSDC_DLY_SEL, 0);
+		writel(0xfffe00c0, host->base + MSDC_PATCH_BIT1);
+		sdr_set_field(host->base + MSDC_PATCH_BIT2, MSDC_PB2_RESPSTSENSEL, 0);
+		sdr_set_field(host->base + MSDC_PATCH_BIT2, MSDC_PB2_CRCSTSENSEL, 0);
+		sdr_clr_bits(host->base + EMMC50_CFG0,
+			     BIT(3) | EMMC50_CFG_CFCSTS_SEL | EMMC50_CFG_CMD_RESP_SEL);
 	}
 
 	if (mmc->caps2 & MMC_CAP2_NO_SDIO) {

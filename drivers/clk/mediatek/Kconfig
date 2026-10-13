@@ -5,6 +5,15 @@
 menu "Clock driver for MediaTek SoC"
 	depends on ARCH_MEDIATEK || COMPILE_TEST
 
+config COMMON_CLK_MT6797_MSDC_LK
+	bool "MT6797 LK-retained MSDC0 bring-up clocks"
+	depends on ARM64 && OF
+	select MFD_SYSCON
+	help
+	  X620 bring-up provider for MSDC0 source/HCLK and its source gate.
+	  Selects the 26 MHz oscillator for this controller only while leaving
+	  global PLLs and firmware pin/power configuration unchanged.
+
 config COMMON_CLK_MEDIATEK
 	tristate
 	select RESET_CONTROLLER

@@ -111,7 +111,50 @@ captured. The A53-only eight-core configuration is the current checkpoint,
 with automatic boot validation still pending. QEMU verified CPU1 online and
 offline with the hotplug build; it does not emulate the stock ATF behavior.
 
-Internal storage, touchscreen, networking, automatic A53 SMP validation,
+MSDC0/eMMC bring-up
+------------------
+
+The current candidate enables the mainline mtk-sd host and MMC block layer,
+with 64 partition minors so the stock boot partition (number 31) is visible.
+The MT6797 match uses its 12-bit divider, PAD_TUNE0 and reference low-speed
+response/data settings. The live vendor DT supplies MSDC0 at 0x11230000
+and SPI 79. Clock-stability polling during a mode change is bounded.
+
+A controller-specific clock provider selects the 26 MHz oscillator for
+MSDC0 source and HCLK. Its source gate can be stopped during divider changes;
+its INFRA gate is separate from USB's gates. Shared clock registers use
+syscon/regmap rather than claiming USB's existing register resource again.
+Global PLLs are left alone. Empty pinctrl states preserve LK's pin routing
+and drive strength. Fixed supply descriptors represent retained VEMC and
+1.8 V IO rails; they do not program PMIC registers or switch physical power.
+
+The first candidate limits eMMC to 26 MHz and supplies no DDR/HS200/HS400
+capabilities. It does not mount any phone partition from initrd. The owner
+confirmed HBG4a2 at 29.1 GiB, all 39 user-area partitions, both 4 MiB boot
+areas and the RPMB character device. The host reported 26 MHz, 8-bit
+high-speed MMC operation and 1.8 V signaling.
+
+Two independent O_DIRECT reads of the first 3,051,520 bytes of the boot
+partition completed without reported transfer errors and both matched the
+known U-Boot image SHA256
+``2ce568d940a595908d40f8569460a2d139790cd51cda679a8202079857772d85``.
+This verifies actual card/partition data reads rather than just probe.
+The owner then created a fresh temporary file on the cache ext4 filesystem,
+wrote 8 MiB using O_DIRECT plus fsync, and read it back using O_DIRECT. The
+reference and readback SHA256 were both
+``1f5f8deaec73400e3eeeead17fecc1de73f0efe738c4b8fab50ff193f894b60b``;
+cmp succeeded and the test emitted MMC_RW_OK. The temporary files were
+removed and the cache filesystem unmounted. No MMC transfer error was
+reported. Its maximal-mount-count warning is filesystem maintenance state,
+not evidence of an MMC transfer failure. An earlier mktemp path error cleared
+after a reboot; its exact cause was not established.
+
+Card enumeration, GPT discovery, known-content direct reads and filesystem
+write/readback are verified in the current 26 MHz mode. DDR, HS200/HS400,
+long-duration stress and booting a full distro from eMMC remain separate,
+unverified follow-up work.
+
+Touchscreen, networking, automatic A53 SMP validation,
 suspend and native panel initialization remain follow-up work. The rich initrd is built from packages
 inside a mounted Debian F2FS image, without unpacking a distribution rootfs
 into a loose directory. Compiled terminfo entries for linux, vt100, xterm and

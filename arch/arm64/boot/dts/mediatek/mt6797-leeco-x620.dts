@@ -5,6 +5,7 @@
 / {
 	model = "LeEco X620 (U-Boot relay bring-up)";
 	compatible = "leeco,x620", "mediatek,mt6797";
+	aliases { mmc0 = &msdc0; };
 	cpus {
 		cpu-map {
 			cluster0 {
@@ -94,10 +95,53 @@
 		mediatek,u3p-dis-msk = <1>;
 		mediatek,force-vbus;
 	};
+
+	msdc_clocks: msdc0-clocks {
+		compatible = "leeco,x620-msdc0-clocks";
+		#clock-cells = <1>;
+		mediatek,topckgen = <&topckgen>;
+		mediatek,infracfg = <&infrasys>;
+	};
+	msdc_vmmc: regulator-emmc {
+		compatible = "regulator-fixed";
+		regulator-name = "lk-retained-vemc";
+		regulator-min-microvolt = <3000000>;
+		regulator-max-microvolt = <3000000>;
+		regulator-always-on;
+	};
+	msdc_vqmmc: regulator-emmc-io {
+		compatible = "regulator-fixed";
+		regulator-name = "lk-retained-emmc-io";
+		regulator-min-microvolt = <1800000>;
+		regulator-max-microvolt = <1800000>;
+		regulator-always-on;
+	};
+	msdc0: mmc@11230000 {
+		compatible = "mediatek,mt6797-mmc";
+		reg = <0 0x11230000 0 0x1000>;
+		interrupts = <GIC_SPI 79 IRQ_TYPE_LEVEL_LOW>;
+		clocks = <&msdc_clocks 0>, <&msdc_clocks 1>, <&msdc_clocks 2>;
+		clock-names = "source", "hclk", "source_cg";
+		/* Empty states preserve the working pinmux/drive settings from LK. */
+		pinctrl-names = "default", "state_uhs";
+		pinctrl-0 = <>;
+		pinctrl-1 = <>;
+		vmmc-supply = <&msdc_vmmc>;
+		vqmmc-supply = <&msdc_vqmmc>;
+		bus-width = <8>;
+		max-frequency = <26000000>;
+		cap-mmc-highspeed;
+		non-removable;
+		no-sd;
+		no-sdio;
+	};
 };
 
 /* First boot inherits clocks and pins; no PLL or power-domain changes. */
-&topckgen { status = "disabled"; };
+&topckgen {
+	compatible = "mediatek,mt6797-topckgen", "syscon";
+	status = "disabled";
+};
 &infrasys { status = "disabled"; };
 &apmixedsys { status = "disabled"; };
 &mmsys { status = "disabled"; };

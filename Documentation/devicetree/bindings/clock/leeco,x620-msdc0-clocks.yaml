@@ -1,0 +1,39 @@
+# SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
+%YAML 1.2
+---
+$id: http://devicetree.org/schemas/clock/leeco,x620-msdc0-clocks.yaml#
+$schema: http://devicetree.org/meta-schemas/core.yaml#
+
+title: LeEco X620 isolated MSDC0 bring-up clocks
+
+maintainers:
+  - dysorder <dysorder@users.noreply.github.com>
+
+description: |
+  Temporary controller-specific provider. It selects the 26 MHz oscillator
+  for MSDC0 source and HCLK, controls the MSDC0 INFRA gate and source gate,
+  and leaves other clock muxes and PLLs untouched. Clock indices are
+  0 (source), 1 (HCLK) and 2 (source gate).
+
+properties:
+  compatible:
+    const: leeco,x620-msdc0-clocks
+
+  "#clock-cells":
+    const: 1
+
+  mediatek,topckgen:
+    $ref: /schemas/types.yaml#/definitions/phandle
+    description: MT6797 top clock syscon containing CLK_CFG_7.
+
+  mediatek,infracfg:
+    $ref: /schemas/types.yaml#/definitions/phandle
+    description: MT6797 INFRA syscon containing the MSDC0 clock gate.
+
+required:
+  - compatible
+  - "#clock-cells"
+  - mediatek,topckgen
+  - mediatek,infracfg
+
+additionalProperties: false
