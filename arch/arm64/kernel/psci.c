@@ -39,7 +39,14 @@ static int __init cpu_psci_cpu_prepare(unsigned int cpu)
 static int cpu_psci_cpu_boot(unsigned int cpu)
 {
 	phys_addr_t pa_secondary_entry = __pa_symbol(secondary_entry);
-	int err = psci_ops.cpu_on(cpu_logical_map(cpu), pa_secondary_entry);
+	int err;
+
+	if (IS_ENABLED(CONFIG_X620_RELAY_DIAGNOSTICS))
+		pr_info("X620_CPU_ON: CPU%u MPIDR=%llx entry=%pa\n",
+			cpu, cpu_logical_map(cpu), &pa_secondary_entry);
+	err = psci_ops.cpu_on(cpu_logical_map(cpu), pa_secondary_entry);
+	if (IS_ENABLED(CONFIG_X620_RELAY_DIAGNOSTICS))
+		pr_info("X620_CPU_ON_RETURN: CPU%u ret=%d\n", cpu, err);
 	if (err && err != -EPERM)
 		pr_err("failed to boot CPU%d (%d)\n", cpu, err);
 

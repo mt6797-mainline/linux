@@ -22,6 +22,7 @@ properties:
     items:
       - enum:
           - mediatek,mt2712-mtu3
+          - mediatek,mt6797-mtu3
           - mediatek,mt8173-mtu3
           - mediatek,mt8183-mtu3
           - mediatek,mt8186-mtu3
@@ -51,6 +52,7 @@ properties:
       - description: optional, wakeup interrupt used to support runtime PM
 
   interrupt-names:
+    minItems: 1
     items:
       - const: device
       - const: wakeup
@@ -97,6 +99,11 @@ properties:
 
   vusb33-supply:
     description: Regulator of USB AVDD3.3v
+
+  mediatek,force-vbus:
+    type: boolean
+    description: Force the device controller's VBUS-valid state for boards
+      using an inherited firmware PHY setup without hardware VBUS detection.
 
   vbus-supply:
     deprecated: true

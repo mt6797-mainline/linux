@@ -5,6 +5,22 @@
 / {
 	model = "LeEco X620 (U-Boot relay bring-up)";
 	compatible = "leeco,x620", "mediatek,mt6797";
+	cpus {
+		cpu-map {
+			cluster0 {
+				core0 { cpu = <&cpu0>; };
+				core1 { cpu = <&cpu1>; };
+				core2 { cpu = <&cpu2>; };
+				core3 { cpu = <&cpu3>; };
+			};
+			cluster1 {
+				core0 { cpu = <&cpu4>; };
+				core1 { cpu = <&cpu5>; };
+				core2 { cpu = <&cpu6>; };
+				core3 { cpu = <&cpu7>; };
+			};
+		};
+	};
 	memory@40000000 {
 		device_type = "memory";
 		reg = <0 0x40000000 0 0x20000000>;
@@ -13,7 +29,7 @@
 		#address-cells = <2>;
 		#size-cells = <2>;
 		ranges;
-		bootargs = "console=tty0 earlycon=x620ram,mmio32,0x444bf000 keep_bootcon loglevel=8 ignore_loglevel printk.time=1 clk_ignore_unused pd_ignore_unused maxcpus=1 cpuidle.off=1 rdinit=/init panic=0 fbcon=nodefer fbcon=font:TER16x32";
+		bootargs = "console=tty0 earlycon=x620ram,mmio32,0x444bf000 keep_bootcon loglevel=8 ignore_loglevel printk.time=1 clk_ignore_unused pd_ignore_unused maxcpus=8 cpuidle.off=1 rdinit=/init panic=0 fbcon=nodefer fbcon=font:TER16x32";
 		framebuffer@bd0c0000 {
 			compatible = "simple-framebuffer";
 			reg = <0 0xbd0c0000 0 0x7f8000>;
@@ -45,6 +61,39 @@
 		      <0 0x1401f000 0 0x1000>;
 		leeco,framebuffer = <0xbd0c0000>;
 	};
+
+	lk_vusb: regulator-vusb {
+		compatible = "regulator-fixed";
+		regulator-name = "lk-retained-vusb33";
+		regulator-min-microvolt = <3300000>;
+		regulator-max-microvolt = <3300000>;
+		regulator-always-on;
+	};
+	usb_resources: usb-resources@11290000 {
+		compatible = "leeco,x620-lk-usb-resources";
+		reg = <0 0x11290000 0 0x1000>, <0 0x10001000 0 0x1000>;
+		reg-names = "phy", "infracfg";
+		#phy-cells = <0>;
+		#clock-cells = <1>;
+	};
+	usb@11271000 {
+		compatible = "mediatek,mt6797-mtu3", "mediatek,mtu3";
+		/* Linux offsets start at the device block, unlike U-Boot's xHCI base. */
+		reg = <0 0x11271000 0 0x3000>, <0 0x11280700 0 0x100>;
+		reg-names = "mac", "ippc";
+		/* Live vendor DT: device SPI 127, host SPI 126. */
+		interrupts = <GIC_SPI 127 IRQ_TYPE_LEVEL_LOW>;
+		interrupt-names = "device";
+		clocks = <&usb_resources 1>, <&usb_resources 2>,
+			 <&usb_resources 0>, <&usb_resources 0>;
+		clock-names = "sys_ck", "ref_ck", "mcu_ck", "dma_ck";
+		phys = <&usb_resources>;
+		vusb33-supply = <&lk_vusb>;
+		dr_mode = "peripheral";
+		maximum-speed = "high-speed";
+		mediatek,u3p-dis-msk = <1>;
+		mediatek,force-vbus;
+	};
 };
 
 /* First boot inherits clocks and pins; no PLL or power-domain changes. */
@@ -57,12 +106,7 @@
 &vencsys { status = "disabled"; };
 &scpsys { status = "disabled"; };
 &pio { status = "disabled"; };
-&cpu1 { status = "disabled"; };
-&cpu2 { status = "disabled"; };
-&cpu3 { status = "disabled"; };
-&cpu4 { status = "disabled"; };
-&cpu5 { status = "disabled"; };
-&cpu6 { status = "disabled"; };
-&cpu7 { status = "disabled"; };
-&cpu8 { status = "disabled"; };
-&cpu9 { status = "disabled"; };
+
+/* Hide A72 CPUs while debugging the CPU8 startup hang. */
+/delete-node/ &cpu8;
+/delete-node/ &cpu9;

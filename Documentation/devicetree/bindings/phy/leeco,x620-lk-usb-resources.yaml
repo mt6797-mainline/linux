@@ -1,0 +1,45 @@
+# SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
+%YAML 1.2
+---
+$id: http://devicetree.org/schemas/phy/leeco,x620-lk-usb-resources.yaml#
+$schema: http://devicetree.org/meta-schemas/core.yaml#
+
+title: LeEco X620 USB2 resources retained from stock LK
+
+maintainers:
+  - dysorder <dysorder@users.noreply.github.com>
+
+description: |
+  Temporary MT6797 bring-up adapter for a USB2 PHY and three INFRA2 clock
+  gates. Firmware supplies PLL, mux, PMIC and PHY calibration state.
+  Clock indices are 0 (bus), 1 (system) and 2 (reference). The provider
+  controls only gates and does not describe or change inherited rates.
+
+properties:
+  compatible:
+    const: leeco,x620-lk-usb-resources
+
+  reg:
+    items:
+      - description: USB PHY register bank, including the USB2 block at 0x800
+      - description: INFRA clock-gate register bank
+
+  reg-names:
+    items:
+      - const: phy
+      - const: infracfg
+
+  "#phy-cells":
+    const: 0
+
+  "#clock-cells":
+    const: 1
+
+required:
+  - compatible
+  - reg
+  - reg-names
+  - "#phy-cells"
+  - "#clock-cells"
+
+additionalProperties: false

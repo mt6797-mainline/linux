@@ -2,6 +2,15 @@
 #
 # Phy drivers for Mediatek devices
 #
+config PHY_MT6797_LK_USB
+	bool "MT6797 USB2 resources retained from LK"
+	depends on ARM64 && ARCH_MEDIATEK && OF && COMMON_CLK
+	select GENERIC_PHY
+	help
+	  Temporary X620 bring-up provider for USB2 PHY recovery and the three
+	  INFRA2 USB clock gates. PMIC rails, PLLs and muxes are inherited from
+	  stock LK. This is not a complete standalone MT6797 PHY driver.
+
 config PHY_MTK_PCIE
 	tristate "MediaTek PCIe-PHY Driver"
 	depends on ARCH_MEDIATEK || COMPILE_TEST
