@@ -101,6 +101,8 @@
 		#clock-cells = <1>;
 		mediatek,topckgen = <&topckgen>;
 		mediatek,infracfg = <&infrasys>;
+		mediatek,apmixedsys = <&apmixedsys>;
+		mediatek,high-speed;
 	};
 	msdc_vmmc: regulator-emmc {
 		compatible = "regulator-fixed";
@@ -129,21 +131,30 @@
 		vmmc-supply = <&msdc_vmmc>;
 		vqmmc-supply = <&msdc_vqmmc>;
 		bus-width = <8>;
-		max-frequency = <26000000>;
+		max-frequency = <200000000>;
 		cap-mmc-highspeed;
+		mmc-hs200-1_8v;
+		mmc-hs400-1_8v;
+		mediatek,tuning-step = <64>;
+		mediatek,latch-ck = <1>;
+		/* MT6797 autok uses coarse DS delay 20 and scans the fine delays. */
+		mediatek,hs400-ds-dly3 = <20>;
 		non-removable;
 		no-sd;
 		no-sdio;
 	};
 };
 
-/* First boot inherits clocks and pins; no PLL or power-domain changes. */
+/* Retain firmware clocks except the isolated MSDC0 clock provider above. */
 &topckgen {
 	compatible = "mediatek,mt6797-topckgen", "syscon";
 	status = "disabled";
 };
 &infrasys { status = "disabled"; };
-&apmixedsys { status = "disabled"; };
+&apmixedsys {
+	compatible = "mediatek,mt6797-apmixedsys", "syscon";
+	status = "disabled";
+};
 &mmsys { status = "disabled"; };
 &imgsys { status = "disabled"; };
 &vdecsys { status = "disabled"; };

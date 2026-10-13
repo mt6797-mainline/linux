@@ -1,11 +1,15 @@
 // SPDX-License-Identifier: GPL-2.0-only
-/* Isolated MSDC0 clocks for X620 bring-up; no global PLL initialization. */
+/* Isolated MSDC0 clocks for X620 bring-up; other PLLs remain firmware-owned. */
+#include <linux/clk.h>
 #include <linux/clk-provider.h>
+#include <linux/math64.h>
 #include <linux/mfd/syscon.h>
 #include <linux/module.h>
 #include <linux/of.h>
 #include <linux/platform_device.h>
 #include <linux/regmap.h>
+
+#include "clk-pll.h"
 
 #define CLK_CFG_7 0x70
 #define MSDC0_SOURCE_GATE BIT(23)
@@ -14,7 +18,78 @@ struct msdc_lk_clock {
 	struct clk_hw hw;
 	struct regmap *map;
 	bool source_gate;
+	unsigned long rate;
 };
+
+/* Same register layout as the upstream MT6797 MSDCPLL descriptor. */
+static const struct mtk_pll_data msdc_lk_pll = {
+	.id = 0,
+	.name = "x620-msdcpll",
+	.reg = 0x250,
+	.pwr_reg = 0x25c,
+	.en_mask = 0x120,
+	.fmax = 3000000000UL,
+	.pcwbits = 21,
+	.pd_reg = 0x250,
+	.pd_shift = 4,
+	.pcw_reg = 0x254,
+};
+
+static void msdc_lk_unregister_pll(void *data)
+{
+	mtk_clk_unregister_plls(&msdc_lk_pll, 1, data);
+}
+
+static int msdc_lk_high_speed(struct device *dev, struct clk_hw **source,
+			      unsigned long *hclk_rate)
+{
+	struct clk_hw_onecell_data *pll_data;
+	struct device_node *node;
+	struct regmap *apmixed;
+	struct clk *pll;
+	u32 con0, con1;
+	u64 rate;
+	int ret;
+
+	apmixed = syscon_regmap_lookup_by_phandle(dev->of_node, "mediatek,apmixedsys");
+	if (IS_ERR(apmixed))
+		return PTR_ERR(apmixed);
+	/* HCLK selector 1 is syspll1_d2 = firmware MAINPLL / 4. */
+	ret = regmap_read(apmixed, 0x220, &con0);
+	if (ret)
+		return ret;
+	ret = regmap_read(apmixed, 0x224, &con1);
+	if (ret)
+		return ret;
+	if (!(con0 & BIT(0)) || !(con1 & GENMASK(20, 0)))
+		return dev_err_probe(dev, -EINVAL, "firmware MAINPLL is not running\n");
+	rate = DIV_ROUND_UP_ULL(26000000ULL * (con1 & GENMASK(20, 0)), BIT(14));
+	rate = DIV_ROUND_UP_ULL(rate, BIT((con0 >> 4) & 7));
+	*hclk_rate = rate / 4;
+
+	pll_data = devm_kzalloc(dev, struct_size(pll_data, hws, 1), GFP_KERNEL);
+	if (!pll_data)
+		return -ENOMEM;
+	pll_data->num = 1;
+	node = of_parse_phandle(dev->of_node, "mediatek,apmixedsys", 0);
+	if (!node)
+		return -EINVAL;
+	ret = mtk_clk_register_plls(node, &msdc_lk_pll, 1, pll_data);
+	of_node_put(node);
+	if (ret)
+		return ret;
+	ret = devm_add_action_or_reset(dev, msdc_lk_unregister_pll, pll_data);
+	if (ret)
+		return ret;
+	pll = devm_clk_hw_get_clk(dev, pll_data->hws[0], "source");
+	if (IS_ERR(pll))
+		return PTR_ERR(pll);
+	ret = clk_set_rate(pll, 400000000);
+	if (ret)
+		return ret;
+	*source = pll_data->hws[0];
+	return 0;
+}
 
 static int msdc_lk_enable(struct clk_hw *hw)
 {
@@ -49,7 +124,9 @@ static int msdc_lk_is_enabled(struct clk_hw *hw)
 
 static unsigned long msdc_lk_rate(struct clk_hw *hw, unsigned long parent_rate)
 {
-	return 26000000;
+	struct msdc_lk_clock *c = container_of(hw, struct msdc_lk_clock, hw);
+
+	return c->source_gate ? parent_rate : c->rate;
 }
 
 static const struct clk_ops msdc_lk_ops = {
@@ -65,6 +142,8 @@ static int msdc_lk_probe(struct platform_device *pdev)
 	struct clk_hw_onecell_data *data;
 	struct regmap *top, *infra;
 	struct msdc_lk_clock *clocks;
+	unsigned long hclk_rate = 26000000;
+	bool high_speed = of_property_read_bool(dev->of_node, "mediatek,high-speed");
 	int i, ret;
 
 	if (!of_machine_is_compatible("leeco,x620"))
@@ -79,25 +158,39 @@ static int msdc_lk_probe(struct platform_device *pdev)
 	ret = regmap_update_bits(top, CLK_CFG_7, MSDC0_SOURCE_GATE, MSDC0_SOURCE_GATE);
 	if (ret)
 		return ret;
-	ret = regmap_update_bits(top, CLK_CFG_7, GENMASK(9, 8) | GENMASK(19, 16), 0);
-	if (ret)
-		return ret;
 	data = devm_kzalloc(dev, struct_size(data, hws, 3), GFP_KERNEL);
 	clocks = devm_kcalloc(dev, 2, sizeof(*clocks), GFP_KERNEL);
 	if (!data || !clocks)
 		return -ENOMEM;
 	data->num = 3;
-	data->hws[0] = devm_clk_hw_register_fixed_rate(dev, "x620-msdc0-source", NULL, 0, 26000000);
-	if (IS_ERR(data->hws[0]))
-		return PTR_ERR(data->hws[0]);
+	if (high_speed) {
+		ret = msdc_lk_high_speed(dev, &data->hws[0], &hclk_rate);
+		if (ret)
+			return ret;
+	} else {
+		data->hws[0] = devm_clk_hw_register_fixed_rate(dev, "x620-msdc0-source",
+							    NULL, 0, 26000000);
+		if (IS_ERR(data->hws[0]))
+			return PTR_ERR(data->hws[0]);
+	}
+	ret = regmap_update_bits(top, CLK_CFG_7, GENMASK(9, 8) | GENMASK(19, 16),
+				high_speed ? BIT(8) | BIT(16) : 0);
+	if (ret)
+		return ret;
 	for (i = 0; i < 2; i++) {
 		struct clk_init_data init = {
 			.name = i ? "x620-msdc0-source-gate" : "x620-msdc0-hclk",
 			.ops = &msdc_lk_ops,
 		};
+		const struct clk_hw *parent = data->hws[0];
 
+		if (i) {
+			init.parent_hws = &parent;
+			init.num_parents = 1;
+		}
 		clocks[i].map = i ? top : infra;
 		clocks[i].source_gate = !!i;
+		clocks[i].rate = hclk_rate;
 		clocks[i].hw.init = &init;
 		ret = devm_clk_hw_register(dev, &clocks[i].hw);
 		if (ret)
@@ -106,7 +199,9 @@ static int msdc_lk_probe(struct platform_device *pdev)
 	}
 	ret = devm_of_clk_add_hw_provider(dev, of_clk_hw_onecell_get, data);
 	if (!ret)
-		dev_info(dev, "MSDC0 source/HCLK: 26 MHz oscillator; PLLs retained\n");
+		dev_info(dev, "MSDC0 source=%lu Hz HCLK=%lu Hz; %s\n",
+			 clk_hw_get_rate(data->hws[0]), hclk_rate,
+			 high_speed ? "MSDCPLL configured; MAINPLL retained" : "PLLs retained");
 	return ret;
 }
 

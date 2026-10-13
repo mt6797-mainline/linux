@@ -23,6 +23,7 @@
 #include <linux/spinlock.h>
 #include <linux/interrupt.h>
 #include <linux/reset.h>
+#include <linux/unaligned.h>
 
 #include <linux/mmc/card.h>
 #include <linux/mmc/core.h>
@@ -78,6 +79,7 @@
 #define MSDC_PAD_TUNE0   0xf0
 #define PAD_DS_TUNE      0x188
 #define PAD_CMD_TUNE     0x18c
+#define PAD_DAT01_TUNE   0x190
 #define EMMC51_CFG0	 0x204
 #define EMMC50_CFG0      0x208
 #define EMMC50_CFG1      0x20c
@@ -269,6 +271,8 @@
 #define PAD_DS_TUNE_DLY3	  GENMASK(16, 12) /* RW */
 
 #define PAD_CMD_TUNE_RX_DLY3	  GENMASK(5, 1)   /* RW */
+#define PAD_CMD_TUNE_TX_DLY	  GENMASK(10, 6)
+#define PAD_DAT_TUNE_TX_DLY	  (GENMASK(10, 6) | GENMASK(26, 22))
 
 /* EMMC51_CFG0 mask */
 #define CMDQ_RDAT_CNT		  GENMASK(21, 12) /* RW */
@@ -277,6 +281,7 @@
 #define EMMC50_CFG_CRCSTS_EDGE    BIT(3)   /* RW */
 #define EMMC50_CFG_CFCSTS_SEL     BIT(4)   /* RW */
 #define EMMC50_CFG_CMD_RESP_SEL   BIT(9)   /* RW */
+#define EMMC50_CFG_TXSKEW_SEL     BIT(29)
 
 /* EMMC50_CFG1 mask */
 #define EMMC50_CFG1_DS_CFG        BIT(28)  /* RW */
@@ -412,6 +417,7 @@ struct mtk_mmc_compatible {
 struct msdc_tune_para {
 	u32 iocon;
 	u32 pad_tune;
+	u32 pad_tune1;
 	u32 pad_cmd_tune;
 	u32 emmc_top_control;
 	u32 emmc_top_cmd;
@@ -478,6 +484,8 @@ struct msdc_host {
 	struct msdc_save_para save_para; /* used when gate HCLK */
 	struct msdc_tune_para def_tune_para; /* default tune setting */
 	struct msdc_tune_para saved_tune_para; /* tune result of CMD21/CMD19 */
+	struct msdc_tune_para hs400_tune_para; /* MT6797 HS400 command window */
+	bool hs400_tune_valid;
 	struct cqhci_host *cq_host;
 	u32 cq_ssc1_time;
 };
@@ -889,6 +897,39 @@ static int msdc_ungate_clock(struct msdc_host *host)
 				  (val & MSDC_CFG_CKSTB), 1, 20000);
 }
 
+static void mt6797_set_timing(struct msdc_host *host, unsigned char timing)
+{
+	struct mmc_host *mmc = mmc_from_priv(host);
+	bool hs400 = timing == MMC_TIMING_MMC_HS400;
+	u32 sense = hs400 ? 5 : timing == MMC_TIMING_MMC_HS200 ? 3 :
+		    mmc->actual_clock > 26000000 ? 2 : 0;
+	int i;
+
+	/* MT6797 autok_init_hs200/hs400: EMMC45 response, DS-sampled HS400 CRC. */
+	sdr_set_field(host->base + MSDC_PATCH_BIT2, MSDC_PB2_RESPSTSENSEL, sense);
+	sdr_set_field(host->base + MSDC_PATCH_BIT2, MSDC_PB2_CRCSTSENSEL, sense);
+	sdr_clr_bits(host->base + MSDC_PATCH_BIT2, MSDC_PATCH_BIT2_CFGRESP);
+	if (hs400) {
+		sdr_clr_bits(host->base + MSDC_PATCH_BIT2, MSDC_PATCH_BIT2_CFGCRCSTS);
+		sdr_set_bits(host->base + EMMC50_CFG0, EMMC50_CFG_CFCSTS_SEL);
+		sdr_clr_bits(host->base + MSDC_IOCON, MSDC_IOCON_DSPL | MSDC_IOCON_W_DSPL);
+		sdr_clr_bits(host->base + MSDC_PAD_TUNE0, MSDC_PAD_TUNE_RD_SEL);
+		sdr_clr_bits(host->base + MSDC_PAD_TUNE0 + TUNING_REG2_FIXED_OFFEST,
+			     MSDC_PAD_TUNE_RD2_SEL);
+	} else {
+		sdr_set_bits(host->base + MSDC_PATCH_BIT2, MSDC_PATCH_BIT2_CFGCRCSTS);
+		sdr_clr_bits(host->base + EMMC50_CFG0, EMMC50_CFG_CFCSTS_SEL);
+	}
+	sdr_clr_bits(host->base + EMMC50_CFG0,
+		     EMMC50_CFG_CRCSTS_EDGE | EMMC50_CFG_CMD_RESP_SEL | EMMC50_CFG_TXSKEW_SEL);
+	/* TX defaults from MT6797 autok_msdc_tx_setting, not another SoC's tuning. */
+	sdr_set_field(host->base + MSDC_PAD_TUNE0, MSDC_PAD_TUNE_CLKTDLY, 0);
+	sdr_set_field(host->base + PAD_CMD_TUNE, PAD_CMD_TUNE_TX_DLY,
+		      hs400 && mmc->actual_clock >= 100000000 ? 9 : 0);
+	for (i = 0; i < 4; i++)
+		sdr_clr_bits(host->base + PAD_DAT01_TUNE + i * 4, PAD_DAT_TUNE_TX_DLY);
+}
+
 static void msdc_set_mclk(struct msdc_host *host, unsigned char timing, u32 hz)
 {
 	struct mmc_host *mmc = mmc_from_priv(host);
@@ -898,6 +939,7 @@ static void msdc_set_mclk(struct msdc_host *host, unsigned char timing, u32 hz)
 	u32 sclk;
 	u32 tune_reg = host->dev_comp->pad_tune_reg;
 	u32 val;
+	struct msdc_tune_para *tune = &host->saved_tune_para;
 
 	if (!hz) {
 		dev_dbg(host->dev, "set mclk to 0\n");
@@ -997,10 +1039,16 @@ static void msdc_set_mclk(struct msdc_host *host, unsigned char timing, u32 hz)
 		} else {
 			writel(host->def_tune_para.pad_tune,
 			       host->base + tune_reg);
+			if (host->dev_comp == &mt6797_compat)
+				writel(host->def_tune_para.pad_tune1,
+				       host->base + tune_reg + TUNING_REG2_FIXED_OFFEST);
 		}
 	} else {
-		writel(host->saved_tune_para.iocon, host->base + MSDC_IOCON);
-		writel(host->saved_tune_para.pad_cmd_tune,
+		if (host->dev_comp == &mt6797_compat &&
+		    timing == MMC_TIMING_MMC_HS400 && host->hs400_tune_valid)
+			tune = &host->hs400_tune_para;
+		writel(tune->iocon, host->base + MSDC_IOCON);
+		writel(tune->pad_cmd_tune,
 		       host->base + PAD_CMD_TUNE);
 		if (host->top_base) {
 			writel(host->saved_tune_para.emmc_top_control,
@@ -1008,10 +1056,15 @@ static void msdc_set_mclk(struct msdc_host *host, unsigned char timing, u32 hz)
 			writel(host->saved_tune_para.emmc_top_cmd,
 			       host->top_base + EMMC_TOP_CMD);
 		} else {
-			writel(host->saved_tune_para.pad_tune,
+			writel(tune->pad_tune,
 			       host->base + tune_reg);
+			if (host->dev_comp == &mt6797_compat)
+				writel(tune->pad_tune1,
+				       host->base + tune_reg + TUNING_REG2_FIXED_OFFEST);
 		}
 	}
+	if (host->dev_comp == &mt6797_compat && host->src_clk_freq > 26000000)
+		mt6797_set_timing(host, timing);
 
 	if (timing == MMC_TIMING_MMC_HS400 &&
 	    host->dev_comp->hs400_tune)
@@ -1849,6 +1902,10 @@ static void msdc_init_hw(struct msdc_host *host)
 		/* Low-speed defaults from MT6797 msdc_init_tune_setting/autok_path_sel. */
 		sdr_set_field(host->base + MSDC_PATCH_BIT, MSDC_CKGEN_MSDC_DLY_SEL, 0);
 		writel(0xfffe00c0, host->base + MSDC_PATCH_BIT1);
+		/* Start the second delay line at zero rather than retaining LK tuning. */
+		writel(host->tuning_step > PAD_DELAY_HALF ?
+		       MSDC_PAD_TUNE_RD2_SEL | MSDC_PAD_TUNE_CMD2_SEL : 0,
+		       host->base + tune_reg + TUNING_REG2_FIXED_OFFEST);
 		sdr_set_field(host->base + MSDC_PATCH_BIT2, MSDC_PB2_RESPSTSENSEL, 0);
 		sdr_set_field(host->base + MSDC_PATCH_BIT2, MSDC_PB2_CRCSTSENSEL, 0);
 		sdr_clr_bits(host->base + EMMC50_CFG0,
@@ -1873,6 +1930,12 @@ static void msdc_init_hw(struct msdc_host *host)
 
 	host->def_tune_para.iocon = readl(host->base + MSDC_IOCON);
 	host->saved_tune_para.iocon = readl(host->base + MSDC_IOCON);
+	if (host->dev_comp == &mt6797_compat) {
+		host->def_tune_para.pad_tune1 =
+			readl(host->base + tune_reg + TUNING_REG2_FIXED_OFFEST);
+		host->saved_tune_para.pad_tune1 = host->def_tune_para.pad_tune1;
+		host->hs400_tune_valid = false;
+	}
 	if (host->top_base) {
 		host->def_tune_para.emmc_top_control =
 			readl(host->top_base + EMMC_TOP_CONTROL);
@@ -2354,6 +2417,9 @@ skip_fall:
 	msdc_set_cmd_delay(host, final_delay);
 	msdc_set_data_delay(host, final_delay);
 
+	if (host->dev_comp == &mt6797_compat)
+		dev_info(host->dev, "HS200 tune: rise=%016llx fall=%016llx phase=%u window=%u\n",
+			 rise_delay, fall_delay, final_delay, final_maxlen);
 	dev_dbg(host->dev, "Final pad delay: %x\n", final_delay);
 	return final_delay == 0xff ? -EIO : 0;
 }
@@ -2366,7 +2432,7 @@ static int msdc_execute_tuning(struct mmc_host *mmc, u32 opcode)
 
 	if (host->dev_comp->data_tune && host->dev_comp->async_fifo) {
 		ret = msdc_tune_together(mmc, opcode);
-		if (host->hs400_mode) {
+		if (host->hs400_mode && host->dev_comp != &mt6797_compat) {
 			sdr_clr_bits(host->base + MSDC_IOCON,
 				     MSDC_IOCON_DSPL | MSDC_IOCON_W_DSPL);
 			msdc_set_data_delay(host, 0);
@@ -2390,6 +2456,9 @@ static int msdc_execute_tuning(struct mmc_host *mmc, u32 opcode)
 
 tune_done:
 	host->saved_tune_para.iocon = readl(host->base + MSDC_IOCON);
+	if (host->dev_comp == &mt6797_compat)
+		host->saved_tune_para.pad_tune1 =
+			readl(host->base + tune_reg + TUNING_REG2_FIXED_OFFEST);
 	host->saved_tune_para.pad_tune = readl(host->base + tune_reg);
 	host->saved_tune_para.pad_cmd_tune = readl(host->base + PAD_CMD_TUNE);
 	if (host->top_base) {
@@ -2406,6 +2475,8 @@ static int msdc_prepare_hs400_tuning(struct mmc_host *mmc, struct mmc_ios *ios)
 	struct msdc_host *host = mmc_priv(mmc);
 
 	host->hs400_mode = true;
+	if (host->dev_comp == &mt6797_compat)
+		host->hs400_tune_valid = false;
 
 	if (host->top_base) {
 		if (host->hs400_ds_dly3)
@@ -2422,11 +2493,116 @@ static int msdc_prepare_hs400_tuning(struct mmc_host *mmc, struct mmc_ios *ios)
 			writel(host->hs400_ds_delay, host->base + PAD_DS_TUNE);
 	}
 	/* hs400 mode must set it to 0 */
-	sdr_clr_bits(host->base + MSDC_PATCH_BIT2, MSDC_PATCH_BIT2_CFGCRCSTS);
+	/* MT6797 is still in HS200 here; change its CRC path in set_mclk. */
+	if (host->dev_comp != &mt6797_compat)
+		sdr_clr_bits(host->base + MSDC_PATCH_BIT2, MSDC_PATCH_BIT2_CFGCRCSTS);
 	/* to improve read performance, set outstanding to 2 */
 	sdr_set_field(host->base + EMMC50_CFG3, EMMC50_CFG3_OUTS_WR, 2);
 
 	return 0;
+}
+
+static void mt6797_set_ds_delay(struct msdc_host *host, u32 delay)
+{
+	u32 first = min(delay, 31U);
+	u32 second = delay < PAD_DELAY_HALF ? 0 : delay - PAD_DELAY_HALF;
+
+	sdr_set_field(host->base + PAD_DS_TUNE, PAD_DS_TUNE_DLY1, first);
+	sdr_set_field(host->base + PAD_DS_TUNE, PAD_DS_TUNE_DLY2, second);
+	sdr_clr_bits(host->base + PAD_DS_TUNE,
+		     PAD_DS_TUNE_DLY_SEL | PAD_DS_TUNE_DLY2_SEL);
+	if (first)
+		sdr_set_bits(host->base + PAD_DS_TUNE, PAD_DS_TUNE_DLY_SEL);
+	if (second)
+		sdr_set_bits(host->base + PAD_DS_TUNE, PAD_DS_TUNE_DLY2_SEL);
+}
+
+static int mt6797_check_ext_csd(struct mmc_card *card)
+{
+	u8 *ext_csd;
+	int ret;
+
+	ret = mmc_get_ext_csd(card, &ext_csd);
+	if (ret)
+		return ret;
+	if (ext_csd[EXT_CSD_REV] != card->ext_csd.rev ||
+	    get_unaligned_le32(ext_csd + EXT_CSD_SEC_CNT) != card->ext_csd.sectors ||
+	    (ext_csd[EXT_CSD_HS_TIMING] & 0xf) != EXT_CSD_TIMING_HS400)
+		ret = -EILSEQ;
+	kfree(ext_csd);
+	return ret;
+}
+
+static int mt6797_hs400_tuning(struct mmc_host *mmc, struct mmc_card *card)
+{
+	struct msdc_host *host = mmc_priv(mmc);
+	struct msdc_delay_phase cmd[2], ds;
+	u64 command_map[2] = { 0, 0 }, data_map = 0;
+	u32 status;
+	int edge, delay, attempt, best, ret = -EIO;
+
+	dev_info(host->dev, "HS400 tuning at %u Hz: command then DS\n", mmc->actual_clock);
+	host->hs400_tuning = true;
+	/* CMD13 is valid in HS400; CMD21 is an HS200 tuning command. */
+	for (edge = 0; edge < 2; edge++) {
+		sdr_set_field(host->base + MSDC_IOCON, MSDC_IOCON_RSPL, edge);
+		for (delay = 0; delay < host->tuning_step; delay++) {
+			msdc_set_cmd_delay(host, delay);
+			for (attempt = 0; attempt < 3; attempt++) {
+				ret = mmc_send_status(card, &status);
+				if (ret || R1_CURRENT_STATE(status) != R1_STATE_TRAN) {
+					ret = ret ?: -EILSEQ;
+					break;
+				}
+			}
+			if (!ret)
+				command_map[edge] |= BIT_ULL(delay);
+		}
+		cmd[edge] = get_best_delay(host, command_map[edge]);
+	}
+	best = cmd[1].maxlen > cmd[0].maxlen;
+	dev_info(host->dev, "HS400 CMD: rise=%016llx fall=%016llx edge=%d phase=%u window=%u\n",
+		 command_map[0], command_map[1], best,
+		 cmd[best].final_phase, cmd[best].maxlen);
+	if (!cmd[best].maxlen) {
+		ret = -EIO;
+		goto out;
+	}
+	sdr_set_field(host->base + MSDC_IOCON, MSDC_IOCON_RSPL, best);
+	msdc_set_cmd_delay(host, cmd[best].final_phase);
+
+	for (delay = 0; delay < host->tuning_step; delay++) {
+		mt6797_set_ds_delay(host, delay);
+		for (attempt = 0; attempt < 3; attempt++) {
+			ret = mt6797_check_ext_csd(card);
+			if (ret)
+				break;
+		}
+		if (!ret)
+			data_map |= BIT_ULL(delay);
+	}
+	ds = get_best_delay(host, data_map);
+	dev_info(host->dev, "HS400 DS: pass=%016llx phase=%u window=%u\n",
+		 data_map, ds.final_phase, ds.maxlen);
+	if (!ds.maxlen) {
+		ret = -EIO;
+		goto out;
+	}
+	mt6797_set_ds_delay(host, ds.final_phase);
+	ret = mt6797_check_ext_csd(card);
+	if (ret)
+		goto out;
+	host->hs400_tune_para.iocon = readl(host->base + MSDC_IOCON);
+	host->hs400_tune_para.pad_tune = readl(host->base + MSDC_PAD_TUNE0);
+	host->hs400_tune_para.pad_tune1 =
+		readl(host->base + MSDC_PAD_TUNE0 + TUNING_REG2_FIXED_OFFEST);
+	host->hs400_tune_para.pad_cmd_tune = readl(host->base + PAD_CMD_TUNE);
+	host->hs400_tune_valid = true;
+	dev_info(host->dev, "HS400 tuned: PAD_DS_TUNE=%08x PAD_CMD_TUNE=%08x\n",
+		 readl(host->base + PAD_DS_TUNE), readl(host->base + PAD_CMD_TUNE));
+out:
+	host->hs400_tuning = false;
+	return ret;
 }
 
 static int msdc_execute_hs400_tuning(struct mmc_host *mmc, struct mmc_card *card)
@@ -2436,6 +2612,9 @@ static int msdc_execute_hs400_tuning(struct mmc_host *mmc, struct mmc_card *card
 	u32 val, result_dly1 = 0;
 	u8 *ext_csd;
 	int i, ret;
+
+	if (host->dev_comp == &mt6797_compat)
+		return mt6797_hs400_tuning(mmc, card);
 
 	if (host->top_base) {
 		sdr_set_bits(host->top_base + EMMC50_PAD_DS_TUNE,

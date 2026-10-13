@@ -9,10 +9,12 @@ config COMMON_CLK_MT6797_MSDC_LK
 	bool "MT6797 LK-retained MSDC0 bring-up clocks"
 	depends on ARM64 && OF
 	select MFD_SYSCON
+	select COMMON_CLK_MEDIATEK
 	help
 	  X620 bring-up provider for MSDC0 source/HCLK and its source gate.
-	  Selects the 26 MHz oscillator for this controller only while leaving
-	  global PLLs and firmware pin/power configuration unchanged.
+	  Selects either the 26 MHz oscillator or a private 400 MHz MSDCPLL
+	  for this controller. Other PLLs and firmware pin/power settings
+	  remain unchanged.
 
 config COMMON_CLK_MEDIATEK
 	tristate

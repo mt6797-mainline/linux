@@ -114,7 +114,7 @@ offline with the hotplug build; it does not emulate the stock ATF behavior.
 MSDC0/eMMC bring-up
 ------------------
 
-The current candidate enables the mainline mtk-sd host and MMC block layer,
+The initial MMC checkpoint enables the mainline mtk-sd host and MMC block layer,
 with 64 partition minors so the stock boot partition (number 31) is visible.
 The MT6797 match uses its 12-bit divider, PAD_TUNE0 and reference low-speed
 response/data settings. The live vendor DT supplies MSDC0 at 0x11230000
@@ -150,9 +150,62 @@ not evidence of an MMC transfer failure. An earlier mktemp path error cleared
 after a reboot; its exact cause was not established.
 
 Card enumeration, GPT discovery, known-content direct reads and filesystem
-write/readback are verified in the current 26 MHz mode. DDR, HS200/HS400,
-long-duration stress and booting a full distro from eMMC remain separate,
-unverified follow-up work.
+write/readback are verified in the 26 MHz checkpoint (3385cd0b6f8c).
+Its exact tested payload is archived at artifacts/mmc-001/built/linux-boot.img
+in the workspace, SHA256
+``0fef8d1419007ea03c0f67fb714ec830bd9c6f92832e677903f170d4a34b2d06``.
+
+HS400 bring-up
+--------------
+
+The new board profile advertises HS200 and HS400 at 1.8 V, with a 200 MHz
+card clock limit. HS400 transfers data on both clock edges; 400 MHz is the
+MSDCPLL source frequency, not the card clock. The isolated provider reuses
+the upstream MT6797 PLL implementation for MSDCPLL only, and reads the
+retained MAINPLL divider to report HCLK = MAINPLL/4. It does not enable the
+global MediaTek clock provider. Pinmux, drive strength and PMIC state still
+come from LK.
+
+MT6797 response/CRC latch sense is 3 for HS200 and 5 for HS400. Its response
+path remains EMMC45; HS400 write CRC uses the DS-sampled EMMC50 path. The
+driver changes that path only when switching actual host timing to HS400,
+not while preparing the HS200 CMD21 scan. Command TX delay is 9 in fast
+HS400 and 0 otherwise, matching the MT6797 reference autok defaults.
+
+HS200 uses the existing CMD21 scan. After changing to HS400, the candidate
+scans both command edges with CMD13, then DS fine delays with EXT_CSD reads.
+Each phase must pass three reads; EXT_CSD revision, sector count and timing
+are checked against the identified card. The coarse DS delay is 20, the
+MT6797 vendor autok default. The driver prints pass masks, chosen phases and
+window widths. HS200 and HS400 command settings are retained separately,
+including the second delay line, across clock changes.
+
+The owner captured a successful physical HS400 startup on 2026-10-13.
+MSDCPLL reported 399,999,939 Hz and HCLK 273 MHz; the actual card clock was
+199,999,969 Hz, with 8-bit HS400 timing and 1.8 V signaling. HBG4a2 and all
+39 user-area partitions were enumerated. The HS200 rising-edge pass mask
+was fffc003fffffffe0 (phase 21, window 33). Both HS400 command edges passed
+all 64 phases; rising phase 21 was selected. The DS pass mask was 0x1ff,
+with phase 3 selected from a nine-phase window. Final PAD_DS_TUNE was
+0x0001400d and PAD_CMD_TUNE 0x00000240.
+
+Two O_DIRECT reads of the first 3,051,520 bytes of mmcblk0p31 in HS400
+completed with 745 full 4 KiB records each. Both SHA256 values matched the
+known U-Boot image:
+``2ce568d940a595908d40f8569460a2d139790cd51cda679a8202079857772d85``.
+The owner supplied the read output and kernel log; no transfer error was
+reported.
+
+A fresh temporary file on the cache ext4 filesystem (mmcblk0p37) then
+passed an 8 MiB O_DIRECT write with fsync and an O_DIRECT readback in HS400.
+Both SHA256 values were
+``4499e247a95d89b2de84647250ed9c11842705eb7aa8c4a27b54b208f6a42837``.
+cmp succeeded and the test emitted HS400_RW_OK. The cleanup trap reported
+no error and the kernel logged the filesystem unmount at 253.403995 seconds.
+No MMC transfer error was reported; the maximal-mount-count warning is
+ext4 filesystem maintenance state. Basic HS400 mode, known-content reads
+and filesystem write/readback are verified. Long-duration stress, tuning
+repeatability across cold boots and booting a full distro remain untested.
 
 Touchscreen, networking, automatic A53 SMP validation,
 suspend and native panel initialization remain follow-up work. The rich initrd is built from packages

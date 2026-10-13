@@ -12,8 +12,9 @@ maintainers:
 description: |
   Temporary controller-specific provider. It selects the 26 MHz oscillator
   for MSDC0 source and HCLK, controls the MSDC0 INFRA gate and source gate,
-  and leaves other clock muxes and PLLs untouched. Clock indices are
-  0 (source), 1 (HCLK) and 2 (source gate).
+  and leaves other clock muxes and PLLs untouched. The optional high-speed
+  profile configures only MSDCPLL to 400 MHz and selects firmware MAINPLL/4
+  for HCLK. Clock indices are 0 (source), 1 (HCLK) and 2 (source gate).
 
 properties:
   compatible:
@@ -29,6 +30,22 @@ properties:
   mediatek,infracfg:
     $ref: /schemas/types.yaml#/definitions/phandle
     description: MT6797 INFRA syscon containing the MSDC0 clock gate.
+
+  mediatek,apmixedsys:
+    $ref: /schemas/types.yaml#/definitions/phandle
+    description: MT6797 APMIXED syscon containing MSDCPLL and MAINPLL.
+
+  mediatek,high-speed:
+    type: boolean
+    description: Use MSDCPLL and firmware MAINPLL/4 instead of the oscillator.
+
+allOf:
+  - if:
+      required:
+        - mediatek,high-speed
+    then:
+      required:
+        - mediatek,apmixedsys
 
 required:
   - compatible
