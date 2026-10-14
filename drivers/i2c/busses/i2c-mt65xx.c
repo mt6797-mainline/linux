@@ -357,6 +357,15 @@ static const struct i2c_adapter_quirks mt7622_i2c_quirks = {
 	.max_num_msgs = 255,
 };
 
+static const struct i2c_adapter_quirks mt6797_i2c_quirks = {
+	.flags = I2C_AQ_COMB_WRITE_THEN_READ | I2C_AQ_NO_ZERO_LEN,
+	.max_num_msgs = 1,
+	.max_write_len = 65535,
+	.max_read_len = 65535,
+	.max_comb_1st_msg_len = 65535,
+	.max_comb_2nd_msg_len = 65535,
+};
+
 static const struct i2c_adapter_quirks mt8183_i2c_quirks = {
 	.flags = I2C_AQ_NO_ZERO_LEN,
 };
@@ -399,6 +408,17 @@ static const struct mtk_i2c_compatible mt6589_compat = {
 	.dma_sync = 0,
 	.ltiming_adjust = 0,
 	.apdma_sync = 0,
+	.max_dma_support = 32,
+};
+
+/* MT6797 uses the v1 map and a separate 16-bit receive length register.
+ * Its APDMA has 32-bit addresses and no asynchronous DMA handshake.
+ */
+static const struct mtk_i2c_compatible mt6797_compat = {
+	.quirks = &mt6797_i2c_quirks,
+	.regs = mt_i2c_regs_v1,
+	.dcm = 1,
+	.aux_len_reg = 1,
 	.max_dma_support = 32,
 };
 
@@ -525,6 +545,7 @@ static const struct of_device_id mtk_i2c_of_match[] = {
 	{ .compatible = "mediatek,mt2712-i2c", .data = &mt2712_compat },
 	{ .compatible = "mediatek,mt6577-i2c", .data = &mt6577_compat },
 	{ .compatible = "mediatek,mt6589-i2c", .data = &mt6589_compat },
+	{ .compatible = "mediatek,mt6797-i2c", .data = &mt6797_compat },
 	{ .compatible = "mediatek,mt7622-i2c", .data = &mt7622_compat },
 	{ .compatible = "mediatek,mt7981-i2c", .data = &mt7981_compat },
 	{ .compatible = "mediatek,mt7986-i2c", .data = &mt7986_compat },

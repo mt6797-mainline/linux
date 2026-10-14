@@ -71,3 +71,5 @@ unzip
 libc6-dev
 linux-libc-dev
 fastfetch
+evtest
+libinput-tools

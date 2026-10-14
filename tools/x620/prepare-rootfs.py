@@ -7,6 +7,40 @@ from pathlib import Path
 import subprocess
 
 
+def install_user_password(root, hash_path):
+    """Apply the locally configured password without storing plaintext."""
+    if not hash_path.is_file():
+        return
+    password_hash = hash_path.read_text().strip()
+    if not password_hash.startswith('$') or any(c in password_hash for c in '\n:'):
+        raise ValueError('Invalid desktop-account password hash')
+    subprocess.run(['chroot', str(root), '/usr/sbin/chpasswd', '-e'],
+                   input=('dysorder:' + password_hash + '\n').encode(), check=True)
+
+
+def install_user_ssh_key(root, key_path):
+    """Install the workspace's persistent public key for the desktop account."""
+    if not key_path.is_file():
+        return
+    subprocess.run(['ssh-keygen', '-l', '-f', str(key_path)], check=True,
+                   stdout=subprocess.DEVNULL)
+    key = key_path.read_text().strip()
+    uid = int(subprocess.check_output(['chroot', str(root), 'id', '-u', 'dysorder']))
+    gid = int(subprocess.check_output(['chroot', str(root), 'id', '-g', 'dysorder']))
+    directory = root / 'home/dysorder/.ssh'
+    directory.mkdir(parents=True, exist_ok=True)
+    directory.chmod(0o700)
+    os.chown(directory, uid, gid)
+    authorized = directory / 'authorized_keys'
+    keys = authorized.read_text().splitlines() if authorized.exists() else []
+    identity = ' '.join(key.split()[:2])
+    if not any(identity in line for line in keys):
+        keys.append(key)
+    authorized.write_text('\n'.join(keys) + '\n')
+    authorized.chmod(0o600)
+    os.chown(authorized, uid, gid)
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--root', type=Path, required=True)
@@ -73,6 +107,8 @@ def main():
         target('/usr/sbin/groupadd', '-f', group)
     if subprocess.run(['chroot', str(root), '/usr/bin/id', 'dysorder'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode:
         target('/usr/sbin/useradd', '-m', '-s', '/bin/bash', '-G', 'sudo,audio,video,input,netdev', 'dysorder')
+    install_user_ssh_key(root, workspace / 'cfg/mt6797-x620-ssh.pub')
+    install_user_password(root, workspace / 'cfg/mt6797-x620-password.hash')
 
     source = subprocess.check_output(['findmnt', '-n', '-o', 'SOURCE', '--mountpoint', str(root)], text=True).strip()
     uuid = subprocess.check_output(['blkid', '-s', 'UUID', '-o', 'value', source], text=True).strip()

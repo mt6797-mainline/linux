@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Package native Debian packages and board support for an offline rootfs update."""
 import argparse
+from datetime import datetime, timezone
 import hashlib
 import io
 import json
@@ -97,7 +98,10 @@ cmp -s /sys/kernel/notes /usr/lib/mt6797-x620/kernel.notes || {
         if path.is_file():
             signature.update(str(path.relative_to(stage)).encode())
             signature.update(path.read_bytes())
-    version = release.split('-')[0] + '+mt6797.' + signature.hexdigest()[:12]
+    # Git snapshot versions sort after the earlier hexadecimal-only versions;
+    # timestamps also keep successive local builds in upgrade order for APT.
+    stamp = datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')
+    version = release.split('-')[0] + '+mt6797.git' + stamp + '.' + signature.hexdigest()[:12]
     size = sum(p.stat().st_size for p in stage.rglob('*') if p.is_file()) // 1024
     write('DEBIAN/control',
           f'Package: mt6797-x620-platform\nVersion: {version}\nArchitecture: arm64\n'
@@ -225,12 +229,21 @@ own_policy=0
 if test "$(cat /proc/1/comm 2>/dev/null || true)" = systemd; then
     systemctl daemon-reload
     systemctl start wpa_supplicant.service
-    systemctl start mt6797-wifi.service
+    if cmp -s /sys/kernel/notes /usr/lib/mt6797-x620/kernel.notes; then
+        systemctl start mt6797-wifi.service
+    else
+        echo 'Kernel modules installed; boot the matching linux-boot.img before loading them.'
+    fi
     systemctl start NetworkManager.service
 fi
 echo MT6797_ROOTFS_UPDATE_OK
 '''
     args.output.parent.mkdir(parents=True, exist_ok=True)
+    # The same native package can update modules without reinstalling the distro.
+    platform_output = args.output.parent / 'mt6797-x620-platform.deb'
+    platform_temporary = platform_output.with_suffix('.deb.building')
+    shutil.copyfile(board_deb, platform_temporary)
+    platform_temporary.replace(platform_output)
     temporary = args.output.with_suffix('.building')
     with tarfile.open(temporary, 'w') as archive:
         prefix = 'mt6797-x620-rootfs-update/'

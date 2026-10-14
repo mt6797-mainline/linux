@@ -8,6 +8,7 @@
 #include <linux/rmi.h>
 #include <linux/of.h>
 #include <linux/delay.h>
+#include <linux/gpio/consumer.h>
 #include <linux/regulator/consumer.h>
 #include "rmi_driver.h"
 
@@ -27,6 +28,8 @@
  *
  * @supplies: Array of voltage regulators
  * @startup_delay: Milliseconds to pause after powering up the regulators
+ * @reset_gpio: Optional active-low hardware reset
+ * @reset_delay: Milliseconds to wait for the sensor after hardware reset
  */
 struct rmi_i2c_xport {
 	struct rmi_transport_dev xport;
@@ -40,6 +43,8 @@ struct rmi_i2c_xport {
 
 	struct regulator_bulk_data supplies[2];
 	u32 startup_delay;
+	struct gpio_desc *reset_gpio;
+	u32 reset_delay;
 };
 
 #define RMI_PAGE_SELECT_REGISTER 0xff
@@ -198,6 +203,19 @@ static void rmi_i2c_unregister_transport(void *data)
 	rmi_unregister_transport_device(&rmi_i2c->xport);
 }
 
+static void rmi_i2c_power_on(struct rmi_i2c_xport *rmi_i2c)
+{
+	msleep(rmi_i2c->startup_delay);
+	if (rmi_i2c->reset_gpio) {
+		gpiod_set_value_cansleep(rmi_i2c->reset_gpio, 1);
+		msleep(20);
+		gpiod_set_value_cansleep(rmi_i2c->reset_gpio, 0);
+		msleep(rmi_i2c->reset_delay);
+		/* A hardware reset also resets the device's page selector. */
+		rmi_i2c->page = -1;
+	}
+}
+
 static int rmi_i2c_probe(struct i2c_client *client)
 {
 	struct rmi_device_platform_data *pdata;
@@ -217,6 +235,13 @@ static int rmi_i2c_probe(struct i2c_client *client)
 		*pdata = *client_pdata;
 
 	pdata->irq = client->irq;
+	rmi_i2c->reset_gpio = devm_gpiod_get_optional(&client->dev, "reset", GPIOD_OUT_LOW);
+	if (IS_ERR(rmi_i2c->reset_gpio))
+		return dev_err_probe(&client->dev, PTR_ERR(rmi_i2c->reset_gpio),
+				     "cannot acquire reset GPIO\n");
+	rmi_i2c->reset_delay = 100;
+	of_property_read_u32(client->dev.of_node, "syna,reset-delay-ms",
+			     &rmi_i2c->reset_delay);
 
 	rmi_dbg(RMI_DEBUG_XPORT, &client->dev, "Probing %s.\n",
 			dev_name(&client->dev));
@@ -249,7 +274,7 @@ static int rmi_i2c_probe(struct i2c_client *client)
 	of_property_read_u32(client->dev.of_node, "syna,startup-delay-ms",
 			     &rmi_i2c->startup_delay);
 
-	msleep(rmi_i2c->startup_delay);
+	rmi_i2c_power_on(rmi_i2c);
 
 	rmi_i2c->client = client;
 	mutex_init(&rmi_i2c->page_mutex);
@@ -314,7 +339,7 @@ static int rmi_i2c_resume(struct device *dev)
 	if (ret)
 		return ret;
 
-	msleep(rmi_i2c->startup_delay);
+	rmi_i2c_power_on(rmi_i2c);
 
 	ret = rmi_driver_resume(rmi_i2c->xport.rmi_dev, true);
 	if (ret)
@@ -350,7 +375,7 @@ static int rmi_i2c_runtime_resume(struct device *dev)
 	if (ret)
 		return ret;
 
-	msleep(rmi_i2c->startup_delay);
+	rmi_i2c_power_on(rmi_i2c);
 
 	ret = rmi_driver_resume(rmi_i2c->xport.rmi_dev, false);
 	if (ret)

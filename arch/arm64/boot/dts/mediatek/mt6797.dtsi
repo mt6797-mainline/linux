@@ -134,6 +134,7 @@
 			    "iocfgr", "iocfgt";
 		gpio-controller;
 		#gpio-cells = <2>;
+		gpio-ranges = <&pio 0 0 262>;
 
 		uart0_pins_a: uart0 {
 			pins0 {

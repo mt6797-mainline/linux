@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /* MT6797 power sequencing from the active stock CCF clk-mt6797-pg.c. */
-#include <linux/clk-provider.h>
+#include <linux/clk.h>
 #include <linux/iopoll.h>
 #include <linux/of.h>
 #include <linux/of_clk.h>
@@ -101,76 +101,20 @@ int mtk_wdt_swsysret_config(int mask, int set)
 	return 0;
 }
 
-struct mt6797_conn_gate {
-	struct clk_hw hw;
-	void __iomem *infra;
-	u32 set, clear, status;
-	u8 bit;
-};
-
-static int mt6797_gate_enable(struct clk_hw *hw)
-{
-	struct mt6797_conn_gate *gate = container_of(hw, struct mt6797_conn_gate, hw);
-	writel(BIT(gate->bit), gate->infra + gate->clear);
-	return 0;
-}
-
-static void mt6797_gate_disable(struct clk_hw *hw)
-{
-	struct mt6797_conn_gate *gate = container_of(hw, struct mt6797_conn_gate, hw);
-	writel(BIT(gate->bit), gate->infra + gate->set);
-}
-
-static int mt6797_gate_is_enabled(struct clk_hw *hw)
-{
-	struct mt6797_conn_gate *gate = container_of(hw, struct mt6797_conn_gate, hw);
-	return !(readl(gate->infra + gate->status) & BIT(gate->bit));
-}
-
-static const struct clk_ops mt6797_conn_gate_ops = {
-	.enable = mt6797_gate_enable,
-	.disable = mt6797_gate_disable,
-	.is_enabled = mt6797_gate_is_enabled,
-};
-
 int mt6797_consys_register_gates(struct device *dev)
 {
-	struct clk_hw_onecell_data *data;
-	void __iomem *infra = (void __iomem *)(conn_reg.topckgen_base + 0x1000);
-	int ret;
+	/* I2C and WMT share AP DMA; the common clock provider owns its gate. */
+	struct clk *btif, *dma;
 
-	data = devm_kzalloc(dev, struct_size(data, hws, 2), GFP_KERNEL);
-	if (!data)
-		return -ENOMEM;
-	data->num = 2;
-	/* Stock set/clear aliases; CG_CON is read for status only. */
-	for (ret = 0; ret < 2; ret++) {
-		struct mt6797_conn_gate *gate;
-		struct clk_init_data init = {
-			.name = ret ? "mt6797-connsys-ap-dma" : "mt6797-connsys-btif",
-			.ops = &mt6797_conn_gate_ops,
-			.flags = CLK_IGNORE_UNUSED,
-		};
-		int err;
-		gate = devm_kzalloc(dev, sizeof(*gate), GFP_KERNEL);
-		if (!gate)
-			return -ENOMEM;
-		gate->infra = infra;
-		gate->set = ret ? 0x88 : 0x80;
-		gate->clear = ret ? 0x8c : 0x84;
-		gate->status = ret ? 0x94 : 0x90;
-		gate->bit = ret ? 18 : 31;
-		gate->hw.init = &init;
-		err = devm_clk_hw_register(dev, &gate->hw);
-		if (err)
-			return err;
-		data->hws[ret] = &gate->hw;
-	}
-	ret = devm_of_clk_add_hw_provider(dev, of_clk_hw_onecell_get, data);
-	if (ret)
-		return ret;
+	btif = devm_clk_get(dev, "btifc");
+	if (IS_ERR(btif))
+		return dev_err_probe(dev, PTR_ERR(btif), "BTIF clock unavailable\n");
+	dma = devm_clk_get(dev, "apdmac");
+	if (IS_ERR(dma))
+		return dev_err_probe(dev, PTR_ERR(dma), "AP DMA clock unavailable\n");
+
 	mt6797_consys_dev = dev;
-	dev_info(dev, "MT6797 CONSYS resources ready; BTIF/AP DMA gates only\n");
+	dev_info(dev, "MT6797 CONSYS resources ready; shared BTIF/AP DMA gates\n");
 	return 0;
 }
 

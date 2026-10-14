@@ -32,6 +32,15 @@ config COMMON_CLK_MT6797_DISPLAY_LK
 	  global clock tree. The native MT6797 MMSYS gate driver and MIPI TX
 	  PHY driver control the downstream display clocks.
 
+config COMMON_CLK_MT6797_INFRA_LK
+	bool "MT6797 firmware-retained AXI parent and peripheral gates"
+	depends on ARM64 && OF && !COMMON_CLK_MT6797
+	select MFD_SYSCON
+	select COMMON_CLK_MEDIATEK
+	help
+	  Read the firmware AXI mux and MAINPLL rate without changing them.
+	  Share the I2C4, AP DMA and BTIF gates between peripheral drivers.
+
 config COMMON_CLK_MEDIATEK_FHCTL
 	bool "clock driver for MediaTek FHCTL hardware control"
 	select COMMON_CLK_MEDIATEK
