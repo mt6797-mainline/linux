@@ -417,4 +417,12 @@ config NVMEM_QORIQ_EFUSE
 	  This driver can also be built as a module. If so, the module
 	  will be called nvmem_qoriq_efuse.
 
+config NVMEM_MT6797_LK_DEVINFO
+	bool "MT6797 LK factory calibration"
+	depends on ARCH_MEDIATEK || COMPILE_TEST
+	depends on OF
+	help
+	  Expose the factory calibration and silicon bin words supplied by
+	  MT6797 LK as a read-only NVMEM provider.
+
 endif

@@ -73,3 +73,5 @@ linux-libc-dev
 fastfetch
 evtest
 libinput-tools
+lm-sensors
+linux-cpupower

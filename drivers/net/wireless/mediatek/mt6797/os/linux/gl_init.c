@@ -3165,7 +3165,11 @@ EXPORT_SYMBOL(mtk_wcn_wlan_gen3_exit);
 
 #else
 
+#ifdef MODULE
 module_init(initWlan);
+#else
+late_initcall_sync(initWlan);
+#endif
 module_exit(exitWlan);
 
 #endif

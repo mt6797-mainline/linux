@@ -3,6 +3,7 @@
 #include "mt6797.dtsi"
 #include <dt-bindings/clock/mt6797-clk.h>
 #include <dt-bindings/gpio/gpio.h>
+#include <dt-bindings/thermal/thermal.h>
 
 / {
 	model = "LeEco X620 (U-Boot relay bring-up)";
@@ -10,6 +11,7 @@
 	aliases {
 		mmc0 = &msdc0;
 		i2c4 = &i2c4;
+		i2c6 = &i2c6;
 		ovl0 = &disp_ovl0;
 		ovl-2l0 = &disp_ovl0_2l;
 		rdma0 = &disp_rdma0;
@@ -61,7 +63,7 @@
 		#size-cells = <2>;
 		ranges;
 		spm@40000000 { reg = <0 0x40000000 0 0x1000>; no-map; };
-		lk-dtb@44000000 { reg = <0 0x44000000 0 0x400000>; no-map; };
+		lk_dtb: lk-dtb@44000000 { reg = <0 0x44000000 0 0x400000>; no-map; };
 		vendor-logs@44400000 { reg = <0 0x44400000 0 0xbf000>; no-map; };
 		/* Raw persistent console is read by stock TWRP; not owned by ramoops. */
 		relay-console@444bf000 { reg = <0 0x444bf000 0 0x10000>; no-map; };
@@ -74,6 +76,73 @@
 		scp@8f000000 { reg = <0 0x8f000000 0 0x1000000>; no-map; };
 		consys_mem: consys@bcc00000 { reg = <0 0xbcc00000 0 0x200000>; no-map; };
 		spm-work@bcea0000 { reg = <0 0xbcea0000 0 0x16000>; no-map; };
+	};
+
+
+	devinfo: devinfo {
+		compatible = "mediatek,mt6797-lk-devinfo";
+		memory-region = <&lk_dtb>;
+		#address-cells = <1>;
+		#size-cells = <1>;
+		speed_bin: speed-bin@58 { reg = <0x58 4>; };
+		thermal_cali: calibration@7c { reg = <0x7c 12>; };
+	};
+
+	auxadc: adc@11001000 {
+		compatible = "mediatek,mt6797-auxadc";
+		reg = <0 0x11001000 0 0x1000>;
+		status = "disabled"; /* Channel 11 is owned by the thermal controller. */
+	};
+
+	thermal: thermal@1100b000 {
+		compatible = "mediatek,mt6797-thermal";
+		reg = <0 0x1100b000 0 0x1000>;
+		clocks = <&infra_clocks CLK_INFRA_THERM>, <&infra_clocks CLK_INFRA_AUXADC>;
+		clock-names = "therm", "auxadc";
+		mediatek,auxadc = <&auxadc>;
+		mediatek,apmixedsys = <&apmixedsys>;
+		mediatek,infracfg = <&infrasys>;
+		nvmem-cells = <&thermal_cali>;
+		nvmem-cell-names = "calibration";
+		#thermal-sensor-cells = <1>;
+	};
+
+	cpufreq@1001a000 {
+		compatible = "mediatek,mt6797-cpufreq";
+		reg = <0 0x1001a000 0 0x1000>,
+		      <0 0x11015000 0 0x1000>,
+		      <0 0x10220000 0 0x1000>;
+		mediatek,infracfg = <&infrasys>;
+		mediatek,topckgen = <&topckgen>;
+		vproc-supply = <&vproc1>;
+		nvmem-cells = <&speed_bin>;
+		nvmem-cell-names = "speed-bin";
+	};
+
+	thermal-zones {
+		/* Stock TZCPU thresholds; cooling states use mainline cpufreq. */
+		mt6797-soc {
+			polling-delay = <250>;
+			polling-delay-passive = <40>;
+			thermal-sensors = <&thermal 6>;
+			trips {
+				soc_warm: warm { temperature = <65000>; hysteresis = <2000>; type = "passive"; };
+				soc_hot: hot { temperature = <85000>; hysteresis = <2000>; type = "passive"; };
+				soc_very_hot: very-hot { temperature = <95000>; hysteresis = <2000>; type = "passive"; };
+				critical { temperature = <117000>; hysteresis = <0>; type = "critical"; };
+			};
+			cooling-maps {
+				map-warm { trip = <&soc_warm>; cooling-device = <&cpu0 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>, <&cpu4 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>; };
+				map-hot { trip = <&soc_hot>; cooling-device = <&cpu0 3 THERMAL_NO_LIMIT>, <&cpu4 3 THERMAL_NO_LIMIT>; };
+				map-very-hot { trip = <&soc_very_hot>; cooling-device = <&cpu0 12 THERMAL_NO_LIMIT>, <&cpu4 12 THERMAL_NO_LIMIT>; };
+			};
+		};
+		mt6797-big { polling-delay = <1000>; polling-delay-passive = <0>; thermal-sensors = <&thermal 0>; trips { critical { temperature = <117000>; hysteresis = <0>; type = "critical"; }; }; };
+		mt6797-gpu { polling-delay = <1000>; polling-delay-passive = <0>; thermal-sensors = <&thermal 1>; trips { critical { temperature = <117000>; hysteresis = <0>; type = "critical"; }; }; };
+		mt6797-sensors { polling-delay = <1000>; polling-delay-passive = <0>; thermal-sensors = <&thermal 2>; trips { critical { temperature = <117000>; hysteresis = <0>; type = "critical"; }; }; };
+		mt6797-cpu-l { polling-delay = <1000>; polling-delay-passive = <0>; thermal-sensors = <&thermal 3>; trips { critical { temperature = <117000>; hysteresis = <0>; type = "critical"; }; }; };
+		mt6797-cpu-ll { polling-delay = <1000>; polling-delay-passive = <0>; thermal-sensors = <&thermal 4>; trips { critical { temperature = <117000>; hysteresis = <0>; type = "critical"; }; }; };
+		mt6797-cci { polling-delay = <1000>; polling-delay-passive = <0>; thermal-sensors = <&thermal 5>; trips { critical { temperature = <117000>; hysteresis = <0>; type = "critical"; }; }; };
 	};
 
 
@@ -386,6 +455,15 @@
 	#interrupt-cells = <2>;
 	status = "okay";
 
+	buck_select: buck-select {
+		pins {
+			pinmux = <MT6797_GPIO61__FUNC_GPIO61>;
+			output-low;
+			bias-disable;
+			input-schmitt-disable;
+		};
+	};
+
 	touch_irq: touch-irq {
 		pins {
 			pinmux = <MT6797_GPIO68__FUNC_EINT7>;
@@ -441,3 +519,37 @@
 /* Hide A72 CPUs while debugging the CPU8 startup hang. */
 /delete-node/ &cpu8;
 /delete-node/ &cpu9;
+
+
+/* Both active A53 clusters share VPROC1 and eight SRAM LDOs. */
+&cpu0 { #cooling-cells = <2>; };
+&cpu4 { #cooling-cells = <2>; };
+
+&i2c6 {
+	compatible = "mediatek,mt6797-i2c-appm";
+	clocks = <&infra_clocks CLK_INFRA_I2C_APPM>, <&infra_clocks CLK_INFRA_AP_DMA>;
+	clock-names = "main", "dma";
+	clock-frequency = <3400000>;
+	clock-div = <10>;
+	pinctrl-names = "default";
+	pinctrl-0 = <&i2c6_pins_a>;
+	mediatek,use-push-pull;
+	status = "okay";
+
+	regulator@68 {
+		compatible = "dlg,da9214";
+		reg = <0x68>;
+		pinctrl-names = "default";
+		pinctrl-0 = <&buck_select>;
+		regulators {
+			vproc1: BUCKA {
+				regulator-name = "vproc1";
+				regulator-min-microvolt = <770000>;
+				regulator-max-microvolt = <1200000>;
+				regulator-boot-on;
+				regulator-always-on;
+			};
+			BUCKB { regulator-name = "vproc2"; regulator-boot-on; regulator-always-on; };
+		};
+	};
+};

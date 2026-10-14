@@ -209,6 +209,7 @@ extern DEV_WMT gDevWmt;
 ********************************************************************************
 */
 extern INT32 wmt_lib_init(VOID);
+extern INT32 wmt_lib_load_config(VOID);
 extern INT32 wmt_lib_deinit(VOID);
 extern INT32 wmt_lib_tx(PUINT8 data, UINT32 size, PUINT32 writtenSize);
 extern INT32 wmt_lib_tx_raw(PUINT8 data, UINT32 size, PUINT32 writtenSize);

@@ -34,4 +34,13 @@ config MTK_LVTS_THERMAL_DEBUGFS
        help
          Enable this option to debug the internals of the device driver.
 
+config MT6797_THERMAL
+	tristate "MT6797 AUXADC thermal controller"
+	depends on HAS_IOMEM
+	depends on NVMEM
+	select MFD_SYSCON
+	help
+	  Read the six MT6797 thermal banks using factory devinfo calibration
+	  and the original AUXADC polling and filter configuration.
+
 endif

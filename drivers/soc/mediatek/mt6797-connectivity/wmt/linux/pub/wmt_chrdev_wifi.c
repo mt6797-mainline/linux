@@ -662,7 +662,11 @@ EXPORT_SYMBOL(mtk_wcn_wmt_wifi_exit);
 
 #else
 
+#ifdef MODULE
 module_init(WIFI_init);
+#else
+late_initcall(WIFI_init);
+#endif
 module_exit(WIFI_exit);
 
 #endif

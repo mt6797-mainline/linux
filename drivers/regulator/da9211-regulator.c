@@ -467,6 +467,14 @@ static int da9211_i2c_probe(struct i2c_client *i2c)
 
 	chip->pdata = i2c->dev.platform_data;
 
+	/* Firmware may leave one-access page revert enabled. Regmap caches the
+	 * selected page, so its range selector needs persistent paging.
+	 */
+	ret = regmap_update_bits(chip->regmap, DA9211_REG_PAGE_CON,
+				 DA9211_PAGE_REVERT, 0);
+	if (ret)
+		return dev_err_probe(chip->dev, ret, "Cannot retain register page\n");
+
 	ret = regmap_read(chip->regmap, DA9211_REG_DEVICE_ID, &data);
 	if (ret < 0) {
 		dev_err(chip->dev, "Failed to read DEVICE_ID reg: %d\n", ret);

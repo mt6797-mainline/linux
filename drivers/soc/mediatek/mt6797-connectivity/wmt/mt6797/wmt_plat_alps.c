@@ -311,11 +311,12 @@ UINT32 wmt_plat_soc_co_clock_flag_get(VOID)
 	return gCoClockFlag;
 }
 
-static UINT32 wmt_plat_soc_co_clock_flag_set(UINT32 flag)
+UINT32 wmt_plat_soc_co_clock_flag_set(UINT32 flag)
 {
 	gCoClockFlag = flag;
 	return 0;
 }
+EXPORT_SYMBOL_GPL(wmt_plat_soc_co_clock_flag_set);
 
 INT32 wmt_plat_init(UINT32 co_clock_type)
 {

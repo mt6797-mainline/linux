@@ -3439,7 +3439,11 @@ int mtk_btif_hal_get_log_lvl(void)
 
 /*---------------------------------------------------------------------------*/
 
+#ifdef MODULE
 module_init(BTIF_init);
+#else
+late_initcall(BTIF_init);
+#endif
 module_exit(BTIF_exit);
 
 /*---------------------------------------------------------------------------*/

@@ -157,6 +157,9 @@ MTK_WCN_BOOL mtk_wcn_wmt_func_on(ENUM_WMTDRV_TYPE_T type)
 {
 	MTK_WCN_BOOL ret;
 
+	if (wmt_lib_load_config())
+		return MTK_WCN_BOOL_FALSE;
+
 	if (type == WMTDRV_TYPE_BT)
 		osal_printtimeofday("############ BT ON ====>");
 

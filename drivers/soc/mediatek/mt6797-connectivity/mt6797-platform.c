@@ -128,7 +128,11 @@ static void __exit mt6797_consys_exit(void)
 	mtk_wcn_consys_hw_deinit();
 	mt6797_consys_dev = NULL;
 }
+#ifdef MODULE
 module_init(mt6797_consys_init);
+#else
+late_initcall(mt6797_consys_init);
+#endif
 module_exit(mt6797_consys_exit);
 MODULE_SOFTDEP("pre: mt6351_vcn");
 MODULE_DESCRIPTION("MT6797 CONSYS platform control");

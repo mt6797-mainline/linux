@@ -2313,6 +2313,10 @@ static int WMT_open(struct inode *inode, struct file *file)
 		return -EIO;
 	}
 
+	ret = wmt_lib_load_config();
+	if (ret)
+		return ret;
+
 	if (atomic_inc_return(&gWmtRefCnt) == 1)
 		WMT_INFO_FUNC("1st call\n");
 
@@ -2541,7 +2545,11 @@ void mtk_wcn_soc_common_drv_exit(void)
 EXPORT_SYMBOL(mtk_wcn_soc_common_drv_exit);
 
 #else
+#ifdef MODULE
 module_init(WMT_init);
+#else
+late_initcall(WMT_init);
+#endif
 module_exit(WMT_exit);
 #endif
 MODULE_LICENSE("GPL");

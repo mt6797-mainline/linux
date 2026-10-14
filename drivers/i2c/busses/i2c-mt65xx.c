@@ -268,6 +268,7 @@ struct mtk_i2c_compatible {
 	unsigned char ltiming_adjust: 1;
 	unsigned char apdma_sync: 1;
 	unsigned char max_dma_support;
+	u16 hs_master_timing;
 };
 
 struct mtk_i2c_ac_timing {
@@ -366,6 +367,16 @@ static const struct i2c_adapter_quirks mt6797_i2c_quirks = {
 	.max_comb_2nd_msg_len = 65535,
 };
 
+/* The MT6797 APPM port packs an 8-bit write and 5-bit read length. */
+static const struct i2c_adapter_quirks mt6797_appm_i2c_quirks = {
+	.flags = I2C_AQ_COMB_WRITE_THEN_READ | I2C_AQ_NO_ZERO_LEN,
+	.max_num_msgs = 1,
+	.max_write_len = 65535,
+	.max_read_len = 65535,
+	.max_comb_1st_msg_len = 255,
+	.max_comb_2nd_msg_len = 31,
+};
+
 static const struct i2c_adapter_quirks mt8183_i2c_quirks = {
 	.flags = I2C_AQ_NO_ZERO_LEN,
 };
@@ -411,7 +422,7 @@ static const struct mtk_i2c_compatible mt6589_compat = {
 	.max_dma_support = 32,
 };
 
-/* MT6797 uses the v1 map and a separate 16-bit receive length register.
+/* Ordinary MT6797 ports use the v1 map and a 16-bit receive length register.
  * Its APDMA has 32-bit addresses and no asynchronous DMA handshake.
  */
 static const struct mtk_i2c_compatible mt6797_compat = {
@@ -420,6 +431,15 @@ static const struct mtk_i2c_compatible mt6797_compat = {
 	.dcm = 1,
 	.aux_len_reg = 1,
 	.max_dma_support = 32,
+};
+
+/* Stock I2C6 has no AUX receive-length register and uses fixed HS entry timing. */
+static const struct mtk_i2c_compatible mt6797_appm_compat = {
+	.quirks = &mt6797_appm_i2c_quirks,
+	.regs = mt_i2c_regs_v1,
+	.dcm = 1,
+	.max_dma_support = 32,
+	.hs_master_timing = 0x1303,
 };
 
 static const struct mtk_i2c_compatible mt7622_compat = {
@@ -546,6 +566,7 @@ static const struct of_device_id mtk_i2c_of_match[] = {
 	{ .compatible = "mediatek,mt6577-i2c", .data = &mt6577_compat },
 	{ .compatible = "mediatek,mt6589-i2c", .data = &mt6589_compat },
 	{ .compatible = "mediatek,mt6797-i2c", .data = &mt6797_compat },
+	{ .compatible = "mediatek,mt6797-i2c-appm", .data = &mt6797_appm_compat },
 	{ .compatible = "mediatek,mt7622-i2c", .data = &mt7622_compat },
 	{ .compatible = "mediatek,mt7981-i2c", .data = &mt7981_compat },
 	{ .compatible = "mediatek,mt7986-i2c", .data = &mt7986_compat },
@@ -924,7 +945,8 @@ static int mtk_i2c_set_speed(struct mtk_i2c *i2c, unsigned int parent_clk)
 			if (ret < 0)
 				continue;
 
-			i2c->timing_reg = (l_sample_cnt << 8) | l_step_cnt;
+			i2c->timing_reg = i2c->dev_comp->hs_master_timing ?:
+				(l_sample_cnt << 8) | l_step_cnt;
 
 			/* Set the high speed mode register */
 			ret = mtk_i2c_calculate_speed(i2c, clk_src,

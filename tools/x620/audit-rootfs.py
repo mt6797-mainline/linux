@@ -30,7 +30,7 @@ def main():
         'usr/bin/dpkg', 'usr/sbin/sshd', 'usr/bin/ssh', 'usr/bin/curl',
         'usr/bin/wget', 'usr/bin/nano', 'usr/bin/mate-session',
         'usr/lib/xorg/Xorg', 'usr/sbin/lightdm', 'usr/sbin/mt6797-wmt',
-        'usr/bin/evtest', 'usr/bin/libinput',
+        'usr/bin/evtest', 'usr/bin/libinput', 'usr/bin/sensors', 'usr/bin/cpupower',
         'usr/libexec/libinput/libinput-debug-events',
     ]
     for program in programs:

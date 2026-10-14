@@ -84,6 +84,10 @@ def main():
     write('usr/lib/mt6797-x620/kernel.notes', notes)
     write('usr/sbin/mt6797-x620-kernel-check', '''#!/bin/sh
 set -eu
+# Builtin Wi-Fi uses no external modules; the kernel owns the complete stack.
+if test -d /sys/bus/platform/drivers/mt-wifi && ! test -e /sys/bus/platform/drivers/mt-wifi/module; then
+    exit 0
+fi
 cmp -s /sys/kernel/notes /usr/lib/mt6797-x620/kernel.notes || {
     echo 'MT6797: running kernel and installed module build differ' >&2
     exit 1
@@ -154,7 +158,7 @@ fi
             return path
         temporary = path.with_name(path.name + '.mt6797-download')
         subprocess.run(['curl', '--fail', '--location', '--silent', '--show-error',
-                        '--retry', '3', '--connect-timeout', '15', '--max-time', '180',
+                        '--retry', '3', '--retry-all-errors', '--connect-timeout', '15', '--max-time', '180',
                         '--output', str(temporary), url], check=True)
         if not valid(temporary):
             raise RuntimeError('APT SHA256/size verification failed: ' + filename)

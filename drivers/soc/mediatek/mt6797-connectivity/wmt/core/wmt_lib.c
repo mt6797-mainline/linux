@@ -166,6 +166,25 @@ static struct {
 	bool thread, core, sync, platform, ps;
 } wmt_resources;
 
+/* Builtin WMT initializes before rootfs. Load stock configuration at first use. */
+static DEFINE_MUTEX(wmt_config_lock);
+
+INT32 wmt_lib_load_config(VOID)
+{
+	INT32 ret = 0;
+
+	mutex_lock(&wmt_config_lock);
+	if (!gDevWmt.rWmtGenConf.cfgExist) {
+		ret = wmt_conf_read_file();
+		if (!ret) {
+			wmt_plat_soc_co_clock_flag_set(gDevWmt.rWmtGenConf.co_clock_flag & 0x0f);
+			pr_info("MT6797_WMT_CONFIG_READY: stock configuration loaded from rootfs\n");
+		}
+	}
+	mutex_unlock(&wmt_config_lock);
+	return ret;
+}
+
 INT32 wmt_lib_init(VOID)
 {
 	INT32 iRet;
@@ -179,11 +198,13 @@ INT32 wmt_lib_init(VOID)
 	osal_memset(&gDevWmt, 0, sizeof(gDevWmt));
 	memset(&wmt_resources, 0, sizeof(wmt_resources));
 
+#ifdef MODULE
 	iRet = wmt_conf_read_file();
 	if (iRet) {
 		WMT_ERR_FUNC("read wmt config file fail(%d)\n", iRet);
 		return -1;
 	}
+#endif
 
 	pThraed = &gDevWmt.thread;
 

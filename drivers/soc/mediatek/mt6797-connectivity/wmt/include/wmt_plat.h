@@ -246,6 +246,7 @@ extern INT32 wmt_set_pmic_voltage(UINT32 level);
 */
 
 INT32 wmt_plat_init(UINT32 co_clock_type);
+UINT32 wmt_plat_soc_co_clock_flag_set(UINT32 flag);
 
 INT32 wmt_plat_deinit(VOID);
 

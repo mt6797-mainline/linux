@@ -44,7 +44,9 @@ case "${1:-status}" in
     calibration) calibration ;;
     start)
         calibration
-        modprobe mt6797_wlan
+        if ! test -d /sys/bus/platform/drivers/mt-wifi; then
+            modprobe mt6797_wlan
+        fi
         launcher=/usr/sbin/mt6797-wmt
         "$launcher" --inspect "$firmware"
         if test -f "$state/launcher.pid" && kill -0 "$(cat "$state/launcher.pid")" 2>/dev/null; then
