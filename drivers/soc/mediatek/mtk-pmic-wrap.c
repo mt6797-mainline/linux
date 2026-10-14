@@ -2466,6 +2466,7 @@ MODULE_DEVICE_TABLE(of, of_pwrap_match_tbl);
 static int pwrap_probe(struct platform_device *pdev)
 {
 	int ret, irq;
+	bool retained;
 	u32 mask_done;
 	struct pmic_wrapper *wrp;
 	struct clk_bulk_data *clk;
@@ -2489,10 +2490,23 @@ static int pwrap_probe(struct platform_device *pdev)
 	wrp->master = of_device_get_match_data(&pdev->dev);
 	wrp->slave = of_slave_id->data;
 	wrp->dev = &pdev->dev;
+	retained = of_property_read_bool(np, "mediatek,retain-bootloader-state");
 
 	wrp->base = devm_platform_ioremap_resource_byname(pdev, "pwrap");
 	if (IS_ERR(wrp->base))
 		return PTR_ERR(wrp->base);
+
+	/* X620 firmware owns the PMIC bus timing, arbitration and interrupt state. */
+	if (retained) {
+		if (wrp->master->type != PWRAP_MT6797 || wrp->slave->type != PMIC_MT6351)
+			return -EINVAL;
+		if (!pwrap_readl(wrp, PWRAP_INIT_DONE2) ||
+		    !(pwrap_readl(wrp, PWRAP_WACS2_RDATA) & PWRAP_STATE_INIT_DONE0))
+			return dev_err_probe(wrp->dev, -ENODEV,
+					     "firmware PMIC wrapper is not initialized\n");
+		dev_info(wrp->dev, "retaining firmware PMIC wrapper; WACS2 regmap only\n");
+		goto create_regmap;
+	}
 
 	if (HAS_CAP(wrp->master->caps, PWRAP_CAP_RESET)) {
 		wrp->rstc = devm_reset_control_get(wrp->dev, "pwrap");
@@ -2588,6 +2602,7 @@ static int pwrap_probe(struct platform_device *pdev)
 	if (ret)
 		return ret;
 
+create_regmap:
 	wrp->regmap = devm_regmap_init(wrp->dev, NULL, wrp, wrp->slave->regops->regmap);
 	if (IS_ERR(wrp->regmap))
 		return PTR_ERR(wrp->regmap);

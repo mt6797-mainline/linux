@@ -1,0 +1,12 @@
+# SPDX-License-Identifier: GPL-2.0-only
+config MT6797_WLAN
+	tristate "MediaTek MT6797 integrated WLAN"
+	depends on ARCH_MEDIATEK || COMPILE_TEST
+	depends on CFG80211 && INET && MT6797_WMT_WIFI
+	select FW_LOADER
+	select WEXT_PRIV
+	select WIRELESS_EXT
+	select NL80211_TESTMODE
+	help
+	  MT6797 integrated WLAN using the vendor gen3 firmware interface
+	  and the on-chip AHB HIF. Requires CONSYS power and WMT transport.

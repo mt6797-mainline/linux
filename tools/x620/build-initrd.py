@@ -54,9 +54,11 @@ def root_target(path):
             if hops > 40:
                 raise RuntimeError('Symlink loop: ' + path)
             target = os.readlink(candidate)
+            target_parts = list(PurePosixPath(target).parts)
             if target.startswith('/'):
                 done = []
-            parts = list(PurePosixPath(target).parts) + parts
+                target_parts = target_parts[1:]
+            parts = target_parts + parts
         else:
             done.append(part)
     return '/'.join(done)
@@ -162,8 +164,8 @@ def main():
         'usr/sbin/blkid', 'usr/sbin/fdisk', 'usr/bin/mount', 'usr/bin/umount',
         'usr/bin/dmesg', 'usr/sbin/dropbear', 'usr/bin/dbclient',
         'usr/bin/dropbearkey', 'usr/sbin/mkfs.f2fs', 'usr/sbin/fsck.f2fs',
-        'usr/sbin/dump.f2fs', 'usr/sbin/mke2fs', 'usr/sbin/e2fsck',
-        'usr/bin/modetest',
+        'usr/sbin/dump.f2fs', 'usr/sbin/resize.f2fs', 'usr/sbin/mke2fs', 'usr/sbin/e2fsck',
+        'usr/bin/modetest', 'usr/sbin/insmod',
     ]
     # Some Debian tools are installed in /usr/bin rather than /usr/sbin.
     for path in binaries:
@@ -182,14 +184,15 @@ def main():
     # ncurses tools such as nano need compiled terminal descriptions too.
     for terminal in ('l/linux', 'v/vt100', 'x/xterm', 'x/xterm-256color'):
         add('usr/share/terminfo/' + terminal)
-    for source, dest in [('initrd-init.sh', 'init'), ('initrd-dashboard.sh', 'usr/bin/x620-dashboard'),
+    for source, dest in [('initrd-init.sh', 'init'),
                          ('initrd-shell.sh', 'usr/bin/x620-shell'),
+                         ('initrd-rootfs.sh', 'usr/bin/x620-rootfs'),
                          ('initrd-usb.sh', 'usr/bin/x620-usb')]:
         generated(dest, (SCRIPT_DIR / source).read_bytes(), 0o755)
     generated('etc/hostname', 'x620-initrd\n')
     generated('etc/resolv.conf', 'nameserver 1.1.1.1\n')
     generated('etc/profile', 'export PATH=/usr/sbin:/usr/bin:/sbin:/bin\nexport TERM=linux\n')
-    generated('etc/apt/sources.list', 'deb [signed-by=/usr/share/keyrings/debian-archive-keyring.pgp] https://deb.debian.org/debian trixie main\ndeb [signed-by=/usr/share/keyrings/debian-archive-keyring.pgp] https://security.debian.org/debian-security trixie-security main\n')
+    generated('etc/apt/sources.list', 'deb [signed-by=/usr/share/keyrings/debian-archive-keyring.pgp] https://mirrors.tuna.tsinghua.edu.cn/debian trixie main\ndeb [signed-by=/usr/share/keyrings/debian-archive-keyring.pgp] https://mirrors.tuna.tsinghua.edu.cn/debian-security trixie-security main\n')
     # The initrd is a curated rescue filesystem, not the full image's dpkg state.
     generated('var/lib/dpkg/status', '')
     generated('etc/motd', 'X620 first-boot diagnostic initrd\n')

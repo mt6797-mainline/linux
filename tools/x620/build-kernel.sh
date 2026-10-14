@@ -9,14 +9,14 @@ export KBUILD_BUILD_USER=builder KBUILD_BUILD_HOST=x620
 export KBUILD_BUILD_TIMESTAMP='Tue Oct 13 00:00:00 UTC 2026'
 export KBUILD_BUILD_VERSION=1
 if [[ ! -f "$KERNEL_OUTPUT/.config" ]]; then
-    make -C "$KERNEL_SOURCE" O="$KERNEL_OUTPUT" \
-        KCONFIG_ALLCONFIG="$KERNEL_SOURCE/arch/arm64/configs/x620_relay.config" allnoconfig
+    cp "$KERNEL_SOURCE/arch/arm64/configs/x620_relay.config" "$KERNEL_OUTPUT/.config"
+    make -C "$KERNEL_SOURCE" O="$KERNEL_OUTPUT" olddefconfig
 else
     bash "$KERNEL_SOURCE/scripts/kconfig/merge_config.sh" -m -O "$KERNEL_OUTPUT" \
         "$KERNEL_OUTPUT/.config" "$KERNEL_SOURCE/arch/arm64/configs/x620_relay.config"
     make -C "$KERNEL_SOURCE" O="$KERNEL_OUTPUT" olddefconfig
 fi
-make -C "$KERNEL_SOURCE" O="$KERNEL_OUTPUT" -j"${BUILD_JOBS:-10}" Image
+make -C "$KERNEL_SOURCE" O="$KERNEL_OUTPUT" -j"${BUILD_JOBS:-10}" Image modules
 aarch64-linux-gnu-gcc -E -P -x assembler-with-cpp -nostdinc -undef -D__DTS__ \
     -I "$KERNEL_SOURCE/arch/arm64/boot/dts/mediatek" \
     -I "$KERNEL_SOURCE/scripts/dtc/include-prefixes" \

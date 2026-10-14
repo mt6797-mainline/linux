@@ -25,6 +25,13 @@ menuconfig REGULATOR
 
 if REGULATOR
 
+config REGULATOR_MT6351_VCN
+	tristate "MediaTek MT6351 connectivity supplies"
+	depends on OF && MTK_PMIC_WRAP
+	help
+	  VCN18, VCN28 and the separate VCN33 BT/WLAN enables of MT6351.
+	  Accesses the PMIC through the MediaTek PMIC wrapper regmap.
+
 config REGULATOR_DEBUG
 	bool "Regulator debug support"
 	help

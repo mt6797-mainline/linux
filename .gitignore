@@ -178,3 +178,7 @@ sphinx_*/
 
 # Rust analyzer configuration
 /rust-project.json
+
+/tools/x620/__pycache__/
+
+/tools/x620/distro-config-audit.json

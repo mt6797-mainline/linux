@@ -5,6 +5,37 @@
 menu "MediaTek SoC drivers"
 	depends on ARCH_MEDIATEK || COMPILE_TEST
 
+config MT6797_CONNSYS
+	tristate "MediaTek MT6797 connectivity power and platform control"
+	depends on OF && REGULATOR_MT6351_VCN
+	select FW_LOADER
+	help
+	  MT6797 CONSYS power/reset, retained infrastructure gates and EMI
+	  ownership, using the vendor register sequence and MT6351 supplies.
+
+config MT6797_WMT
+	tristate "MediaTek MT6797 STP/WMT connection management"
+	depends on MT6797_BTIF && MT6797_CONNSYS
+	select FW_LOADER
+	help
+	  The stock MT6797 WMT protocol and STP multiplexer initialize
+	  the connectivity firmware before the WLAN core is started.
+
+config MT6797_WMT_WIFI
+	tristate "MediaTek MT6797 WMT WLAN function control"
+	depends on MT6797_WMT
+	help
+	  The stock WLAN function/reset and P2P callback interface used
+	  between the gen3 WLAN core and WMT.
+
+config MT6797_BTIF
+	tristate "MediaTek MT6797 Bluetooth/WMT transport"
+	depends on ARCH_MEDIATEK || COMPILE_TEST
+	depends on OF && MT6797_CONNSYS
+	help
+	  The MT6797 BTIF and its AP DMA transport carry the STP/WMT
+	  initialization protocol used by the integrated connectivity system.
+
 config MTK_CMDQ
 	tristate "MediaTek CMDQ Support"
 	depends on ARCH_MEDIATEK || COMPILE_TEST

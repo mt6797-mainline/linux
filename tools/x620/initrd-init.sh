@@ -25,6 +25,7 @@ if test -f /sys/firmware/fdt; then
     cat /sys/firmware/fdt > /run/boot.dtb
     dtc -I dtb -O dts /run/boot.dtb > /run/boot.dts 2>/run/dtc.log || true
 fi
+. /usr/bin/x620-rootfs
 mkdir -p /run/diag
 cat /proc/meminfo > /run/diag/meminfo
 cat /proc/interrupts > /run/diag/interrupts
@@ -42,9 +43,7 @@ if test -r /sys/class/graphics/fb0/name; then
 fi
 echo 'X620_INITRD_READY: diagnostic shell and tools available' > /dev/console
 if test -c /dev/tty1; then
-    # BusyBox openvt has no -f option and VT1 is already in use by fbcon.
-    # Open the existing VTs directly rather than allocating a fresh VT.
-    setsid sh -c 'exec /usr/bin/x620-dashboard < /dev/tty1 > /dev/tty1 2>&1' &
+    # VT1 retains the native Linux boot console; diagnostics are on VT2.
     if test -c /dev/tty2; then
         setsid sh -c 'exec /usr/bin/x620-shell < /dev/tty2 > /dev/tty2 2>&1' &
     fi

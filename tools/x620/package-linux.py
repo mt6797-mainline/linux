@@ -17,14 +17,14 @@ def package(dtb, target, cmdline):
     temporary = target.with_suffix(".building")
     subprocess.run(["mkbootimg", "--header_version", "2", "--pagesize", "2048",
         "--base", "0x40000000", "--kernel_offset", "0x200000",
-        "--ramdisk_offset", "0x5000000", "--dtb_offset", "0x7000000",
+        "--ramdisk_offset", "0x2800000", "--dtb_offset", "0x7000000",
         "--kernel", str(DIST / "Image.gz"), "--ramdisk", str(DIST / "initrd.cpio.gz"),
         "--dtb", str(dtb), "--cmdline", cmdline, "--output", str(temporary)], check=True)
     data = temporary.read_bytes()
     assert data[:8] == b"ANDROID!"
     ks, ka, rs, ra, ss, sa, tags, page, version = struct.unpack_from("<9I", data, 8)
     ds, da = struct.unpack_from("<IQ", data, 1648)
-    assert (ka, ra, da, page, version, ss) == (0x40200000, 0x45000000, 0x47000000, 2048, 2, 0)
+    assert (ka, ra, da, page, version, ss) == (0x40200000, 0x42800000, 0x47000000, 2048, 2, 0)
     k = data[page:page + ks]
     assert gzip.decompress(k) == (DIST / "Image").read_bytes()
     ro = page + ((ks + page - 1) // page) * page
@@ -34,7 +34,8 @@ def package(dtb, target, cmdline):
     assert len(data) < 0x4000000  # Measured relay fastboot buffer, not partition size.
     offset, runtime, flags = struct.unpack_from("<QQQ", gzip.decompress(k), 8)
     assert offset == 0 and flags & 8 and 0x40200000 + runtime < 0x44000000
-    assert 0x45000000 + rs < 0x46000000
+    # Fit between the expanded kernel and the live LK DT reservation at 0x44000000.
+    assert 0x40200000 + runtime <= ra and ra + rs <= 0x44000000
     temporary.replace(target)
     return {"bytes": len(data), "sha256": hashlib.sha256(data).hexdigest(),
             "kernel_addr": hex(ka), "initrd_addr": hex(ra), "dtb_addr": hex(da)}

@@ -32,13 +32,19 @@
 	};
 	memory@40000000 {
 		device_type = "memory";
-		reg = <0 0x40000000 0 0x20000000>;
+		/* LK-populated banks from the live stock DT; firmware holes stay excluded. */
+		reg = <0 0x40000000 0 0x4e000000>,
+		      <0 0x8e600000 0 0x11a00000>,
+		      <0 0xa0000000 0 0x12000000>,
+		      <0 0xb9000000 0 0x03000000>,
+		      <0 0xbcc00000 0 0x002c0000>,
+		      <0 0xc0000000 0 0x40000000>;
 	};
 	chosen {
 		#address-cells = <2>;
 		#size-cells = <2>;
 		ranges;
-		bootargs = "console=tty0 earlycon=x620ram,mmio32,0x444bf000 keep_bootcon loglevel=8 ignore_loglevel printk.time=1 clk_ignore_unused pd_ignore_unused maxcpus=8 cpuidle.off=1 rdinit=/init panic=0 fbcon=nodefer fbcon=font:TER16x32";
+		bootargs = "console=tty0 earlycon=x620ram,mmio32,0x444bf000 keep_bootcon loglevel=8 ignore_loglevel printk.time=1 clk_ignore_unused pd_ignore_unused maxcpus=8 cpuidle.off=1 rdinit=/init panic=0 fbcon=nodefer";
 		framebuffer@bd0c0000 {
 			compatible = "simple-framebuffer";
 			reg = <0 0xbd0c0000 0 0x7f8000>;
@@ -62,9 +68,84 @@
 		preloader@44800000 { reg = <0 0x44800000 0 0x100000>; no-map; };
 		lk@46000000 { reg = <0 0x46000000 0 0x400000>; no-map; };
 		framebuffer@bd0c0000 { reg = <0 0xbd0c0000 0 0x1be0000>; no-map; };
+		/* Stock /proc/iomem fixes the dynamic SCP/CONSYS/SPM allocations here. */
+		scp@8f000000 { reg = <0 0x8f000000 0 0x1000000>; no-map; };
+		consys_mem: consys@bcc00000 { reg = <0 0xbcc00000 0 0x200000>; no-map; };
+		spm-work@bcea0000 { reg = <0 0xbcea0000 0 0x16000>; no-map; };
 	};
 
 
+	pwrap@1000d000 {
+		compatible = "mediatek,mt6797-pwrap";
+		reg = <0 0x1000d000 0 0x1000>;
+		reg-names = "pwrap";
+		interrupts = <GIC_SPI 178 IRQ_TYPE_LEVEL_HIGH>;
+		mediatek,retain-bootloader-state;
+		pmic_mt6351: pmic {
+			compatible = "mediatek,mt6351";
+			regulators {
+				vcn18: ldo_vcn18 {
+					regulator-name = "vcn18";
+					regulator-min-microvolt = <1800000>;
+					regulator-max-microvolt = <1800000>;
+				};
+				vcn28: ldo_vcn28 {
+					regulator-name = "vcn28";
+					regulator-min-microvolt = <2800000>;
+					regulator-max-microvolt = <2800000>;
+				};
+				vcn33_bt: ldo_vcn33_bt {
+					regulator-name = "vcn33_bt";
+					regulator-min-microvolt = <3300000>;
+					regulator-max-microvolt = <3300000>;
+				};
+				vcn33_wifi: ldo_vcn33_wifi {
+					regulator-name = "vcn33_wifi";
+					regulator-min-microvolt = <3300000>;
+					regulator-max-microvolt = <3300000>;
+				};
+			};
+		};
+	};
+	consys: consys@18070000 {
+		compatible = "mediatek,mt6797-consys";
+		reg = <0 0x18070000 0 0x200>, <0 0x10007000 0 0x100>,
+		      <0 0x10000000 0 0x2000>, <0 0x10006000 0 0x1000>;
+		interrupts = <GIC_SPI 284 IRQ_TYPE_LEVEL_LOW>,
+			     <GIC_SPI 285 IRQ_TYPE_LEVEL_LOW>;
+		memory-region = <&consys_mem>;
+		vcn18-supply = <&vcn18>;
+		vcn28-supply = <&vcn28>;
+		vcn33_bt-supply = <&vcn33_bt>;
+		vcn33_wifi-supply = <&vcn33_wifi>;
+		/* Stock WMT_SOC.cfg: gps_lna_enable=0, co_clock_flag=0. */
+		mediatek,no-gps-lna;
+		#clock-cells = <1>;
+	};
+	btif@1100c000 {
+		compatible = "mediatek,mt6797-btif", "mediatek,btif";
+		reg = <0 0x1100c000 0 0x1000>;
+		interrupts = <GIC_SPI 130 IRQ_TYPE_LEVEL_LOW>;
+		clocks = <&consys 0>, <&consys 1>;
+		clock-names = "btifc", "apdmac";
+	};
+	btif-tx@11000a00 {
+		compatible = "mediatek,btif_tx";
+		reg = <0 0x11000a00 0 0x80>;
+		interrupts = <GIC_SPI 116 IRQ_TYPE_LEVEL_LOW>;
+	};
+	btif-rx@11000a80 {
+		compatible = "mediatek,btif_rx";
+		reg = <0 0x11000a80 0 0x80>;
+		interrupts = <GIC_SPI 117 IRQ_TYPE_LEVEL_LOW>;
+	};
+	wifi@180f0000 {
+		compatible = "mediatek,mt6797-wlan", "mediatek,WIFI";
+		reg = <0 0x180f0000 0 0x1100>;
+		interrupts = <GIC_SPI 283 IRQ_TYPE_LEVEL_LOW>;
+		clocks = <&consys 1>;
+		clock-names = "wifi-dma";
+	};
 	lk_vusb: regulator-vusb {
 		compatible = "regulator-fixed";
 		regulator-name = "lk-retained-vusb33";
