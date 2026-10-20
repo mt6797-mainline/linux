@@ -116,6 +116,7 @@ config BATTERY_CPCAP
 	  phones and tablets such as droid 4.
 
 config BATTERY_CW2015
+	depends on IIO
 	tristate "CW2015 Battery driver"
 	depends on I2C
 	select REGMAP_I2C
@@ -1017,5 +1018,13 @@ config FUEL_GAUGE_MM8013
 	  It enables the monitoring of many battery parameters, including
 	  the state of charge, temperature, cycle count, actual and design
 	  capacity, etc.
+
+config MT6797_CHARGER
+	tristate "MT6797 dual charger battery policy"
+	depends on OF && IIO && THERMAL
+	depends on CHARGER_BQ25890 && BATTERY_CW2015
+	help
+	  Factory battery temperature and USB input limits for MT6797 boards
+	  with a CW2015 gauge and BQ25890/BQ25892 chargers.
 
 endif # POWER_SUPPLY

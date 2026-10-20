@@ -122,6 +122,12 @@ struct bq25890_device {
 	struct regmap *rmap;
 	struct regmap_field *rmap_fields[F_MAX_FIELDS];
 
+	struct delayed_work poll_work;
+	u32 poll_interval_ms;
+	u32 watchdog_ms;
+	bool initial_charge_inhibit;
+	bool initial_hiz;
+	bool disable_high_voltage;
 	bool skip_reset;
 	bool read_back_init_data;
 	bool force_hiz;
@@ -149,7 +155,7 @@ static const struct regmap_access_table bq25890_writeable_regs = {
 
 static const struct regmap_range bq25890_volatile_reg_ranges[] = {
 	regmap_reg_range(0x00, 0x00),
-	regmap_reg_range(0x02, 0x02),
+	regmap_reg_range(0x02, 0x03),
 	regmap_reg_range(0x09, 0x09),
 	regmap_reg_range(0x0b, 0x14),
 };
@@ -464,7 +470,10 @@ static int bq25890_get_vbus_voltage(struct bq25890_device *bq)
 	return bq25890_find_val(ret, TBL_VBUSV);
 }
 
-static void bq25890_update_state(struct bq25890_device *bq,
+static int bq25890_get_chip_state(struct bq25890_device *bq,
+				  struct bq25890_state *state);
+
+static int bq25890_update_state(struct bq25890_device *bq,
 				 enum power_supply_property psp,
 				 struct bq25890_state *state)
 {
@@ -472,6 +481,12 @@ static void bq25890_update_state(struct bq25890_device *bq,
 	int ret;
 
 	mutex_lock(&bq->lock);
+	/* Do not turn failed I2C reads into a cached "healthy" charge state. */
+	ret = bq25890_get_chip_state(bq, state);
+	if (ret < 0) {
+		mutex_unlock(&bq->lock);
+		return ret;
+	}
 	/* update state in case we lost an interrupt */
 	__bq25890_handle_irq(bq);
 	*state = bq->state;
@@ -481,8 +496,9 @@ static void bq25890_update_state(struct bq25890_device *bq,
 	mutex_unlock(&bq->lock);
 
 	if (do_adc_conv)
-		regmap_field_read_poll_timeout(bq->rmap_fields[F_CONV_START],
+		return regmap_field_read_poll_timeout(bq->rmap_fields[F_CONV_START],
 			ret, !ret, 25000, 1000000);
+	return 0;
 }
 
 static int bq25890_power_supply_get_property(struct power_supply *psy,
@@ -493,12 +509,37 @@ static int bq25890_power_supply_get_property(struct power_supply *psy,
 	struct bq25890_state state;
 	int ret;
 
-	bq25890_update_state(bq, psp, &state);
+	ret = bq25890_update_state(bq, psp, &state);
+	if (ret < 0)
+		return ret;
 
 	switch (psp) {
+	case POWER_SUPPLY_PROP_USB_TYPE:
+		ret = bq25890_field_read(bq, F_VBUS_STAT);
+		if (ret < 0)
+			return ret;
+		switch (ret) {
+		case 1: val->intval = POWER_SUPPLY_USB_TYPE_SDP; break;
+		case 2: val->intval = POWER_SUPPLY_USB_TYPE_CDP; break;
+		case 3: case 4: val->intval = POWER_SUPPLY_USB_TYPE_DCP; break;
+		default: val->intval = POWER_SUPPLY_USB_TYPE_UNKNOWN;
+		}
+		break;
+	case POWER_SUPPLY_PROP_CHARGE_BEHAVIOUR:
+		ret = bq25890_field_read(bq, F_CHG_CFG);
+		if (ret < 0)
+			return ret;
+		val->intval = ret ? POWER_SUPPLY_CHARGE_BEHAVIOUR_AUTO :
+			POWER_SUPPLY_CHARGE_BEHAVIOUR_INHIBIT_CHARGE;
+		break;
 	case POWER_SUPPLY_PROP_STATUS:
+		ret = bq25890_field_read(bq, F_CHG_CFG);
+		if (ret < 0)
+			return ret;
 		if (!state.online || state.hiz)
 			val->intval = POWER_SUPPLY_STATUS_DISCHARGING;
+		else if (!ret)
+			val->intval = POWER_SUPPLY_STATUS_NOT_CHARGING;
 		else if (state.chrg_status == STATUS_NOT_CHARGING)
 			val->intval = POWER_SUPPLY_STATUS_NOT_CHARGING;
 		else if (state.chrg_status == STATUS_PRE_CHARGING ||
@@ -537,7 +578,11 @@ static int bq25890_power_supply_get_property(struct power_supply *psy,
 		break;
 
 	case POWER_SUPPLY_PROP_HEALTH:
-		if (!state.chrg_fault && !state.bat_fault && !state.boost_fault)
+		if (state.ntc_fault == NTC_FAULT_COLD)
+			val->intval = POWER_SUPPLY_HEALTH_COLD;
+		else if (state.ntc_fault == NTC_FAULT_HOT)
+			val->intval = POWER_SUPPLY_HEALTH_OVERHEAT;
+		else if (!state.chrg_fault && !state.bat_fault && !state.boost_fault)
 			val->intval = POWER_SUPPLY_HEALTH_GOOD;
 		else if (state.bat_fault)
 			val->intval = POWER_SUPPLY_HEALTH_OVERVOLTAGE;
@@ -692,6 +737,17 @@ static int bq25890_power_supply_set_property(struct power_supply *psy,
 	u8 lval;
 
 	switch (psp) {
+	case POWER_SUPPLY_PROP_CHARGE_BEHAVIOUR:
+		if (val->intval != POWER_SUPPLY_CHARGE_BEHAVIOUR_AUTO &&
+		    val->intval != POWER_SUPPLY_CHARGE_BEHAVIOUR_INHIBIT_CHARGE)
+			return -EINVAL;
+		ret = bq25890_field_write(bq, F_CHG_CFG,
+			val->intval == POWER_SUPPLY_CHARGE_BEHAVIOUR_AUTO);
+		if (!ret && bq->watchdog_ms)
+			ret = bq25890_field_write(bq, F_WD, 1);
+		if (!ret && bq->watchdog_ms)
+			ret = bq25890_field_write(bq, F_WD_RST, 1);
+		return ret;
 	case POWER_SUPPLY_PROP_CONSTANT_CHARGE_CURRENT:
 		maxval = bq25890_find_val(bq->init_data.ichg, TBL_ICHG);
 		lval = bq25890_find_idx(min(val->intval, maxval), TBL_ICHG);
@@ -718,6 +774,7 @@ static int bq25890_power_supply_property_is_writeable(struct power_supply *psy,
 						      enum power_supply_property psp)
 {
 	switch (psp) {
+	case POWER_SUPPLY_PROP_CHARGE_BEHAVIOUR:
 	case POWER_SUPPLY_PROP_CONSTANT_CHARGE_CURRENT:
 	case POWER_SUPPLY_PROP_CONSTANT_CHARGE_VOLTAGE:
 	case POWER_SUPPLY_PROP_INPUT_CURRENT_LIMIT:
@@ -951,14 +1008,39 @@ static int bq25890_hw_init(struct bq25890_device *bq)
 		 * takes care of initalizition F_CHG_CFG is set to 0 before
 		 * handing control over to the OS.
 		 */
-		ret = bq25890_field_write(bq, F_CHG_CFG, 1);
+		ret = bq25890_field_write(bq, F_CHG_CFG, !bq->initial_charge_inhibit);
 		if (ret < 0) {
 			dev_dbg(bq->dev, "Enabling charging failed %d\n", ret);
 			return ret;
 		}
 	}
 
-	/* disable watchdog */
+	if (bq->initial_charge_inhibit) {
+		ret = bq25890_field_write(bq, F_CHG_CFG, 0);
+		if (ret)
+			return ret;
+	}
+	if (bq->initial_charge_inhibit) {
+		ret = bq25890_field_write(bq, F_EN_HIZ, bq->initial_hiz);
+		if (ret)
+			return ret;
+		bq->force_hiz = bq->initial_hiz;
+	}
+	if (bq->disable_high_voltage) {
+		ret = 0;
+		if (bq->chip_version != BQ25896) {
+			ret = bq25890_field_write(bq, F_HVDCP_EN, 0);
+			if (!ret)
+				ret = bq25890_field_write(bq, F_MAXC_EN, 0);
+		}
+		if (!ret)
+			ret = bq25890_field_write(bq, F_PUMPX_EN, 0);
+		if (!ret)
+			ret = bq25890_field_write(bq, F_OTG_CFG, 0);
+		if (ret)
+			return ret;
+	}
+	/* Start a board watchdog only once its policy has acquired all sensors. */
 	ret = bq25890_field_write(bq, F_WD, 0);
 	if (ret < 0) {
 		dev_dbg(bq->dev, "Disabling watchdog failed %d\n", ret);
@@ -987,6 +1069,8 @@ static int bq25890_hw_init(struct bq25890_device *bq)
 }
 
 static const enum power_supply_property bq25890_power_supply_props[] = {
+	POWER_SUPPLY_PROP_USB_TYPE,
+	POWER_SUPPLY_PROP_CHARGE_BEHAVIOUR,
 	POWER_SUPPLY_PROP_MANUFACTURER,
 	POWER_SUPPLY_PROP_MODEL_NAME,
 	POWER_SUPPLY_PROP_STATUS,
@@ -1011,6 +1095,10 @@ static char *bq25890_charger_supplied_to[] = {
 
 static const struct power_supply_desc bq25890_power_supply_desc = {
 	.type = POWER_SUPPLY_TYPE_USB,
+	.usb_types = BIT(POWER_SUPPLY_USB_TYPE_UNKNOWN) | BIT(POWER_SUPPLY_USB_TYPE_SDP) |
+		     BIT(POWER_SUPPLY_USB_TYPE_CDP) | BIT(POWER_SUPPLY_USB_TYPE_DCP),
+	.charge_behaviours = BIT(POWER_SUPPLY_CHARGE_BEHAVIOUR_AUTO) |
+			     BIT(POWER_SUPPLY_CHARGE_BEHAVIOUR_INHIBIT_CHARGE),
 	.properties = bq25890_power_supply_props,
 	.num_properties = ARRAY_SIZE(bq25890_power_supply_props),
 	.get_property = bq25890_power_supply_get_property,
@@ -1036,6 +1124,7 @@ static int bq25890_power_supply_init(struct bq25890_device *bq)
 
 	psy_cfg.supplied_to = bq25890_charger_supplied_to;
 	psy_cfg.num_supplicants = ARRAY_SIZE(bq25890_charger_supplied_to);
+	psy_cfg.fwnode = dev_fwnode(bq->dev);
 
 	bq->charger = devm_power_supply_register(bq->dev, &bq->desc, &psy_cfg);
 
@@ -1430,6 +1519,15 @@ static int bq25890_fw_probe(struct bq25890_device *bq)
 		bq->iinlim_percentage = 100;
 	}
 
+	device_property_read_u32(bq->dev, "linux,poll-interval-ms", &bq->poll_interval_ms);
+	if (bq->poll_interval_ms && (bq->poll_interval_ms < 1000 || bq->poll_interval_ms > 60000))
+		return -EINVAL;
+	device_property_read_u32(bq->dev, "ti,watchdog-timeout-ms", &bq->watchdog_ms);
+	if (bq->watchdog_ms && bq->watchdog_ms != 40000)
+		return -EINVAL;
+	bq->initial_hiz = device_property_read_bool(bq->dev, "linux,initial-hiz");
+	bq->initial_charge_inhibit = device_property_read_bool(bq->dev, "linux,initial-charge-inhibit");
+	bq->disable_high_voltage = device_property_read_bool(bq->dev, "ti,disable-high-voltage");
 	bq->skip_reset = device_property_read_bool(bq->dev, "linux,skip-reset");
 	bq->read_back_init_data = device_property_read_bool(bq->dev,
 						"linux,read-back-settings");
@@ -1450,6 +1548,7 @@ static void bq25890_non_devm_cleanup(void *data)
 {
 	struct bq25890_device *bq = data;
 
+	cancel_delayed_work_sync(&bq->poll_work);
 	cancel_delayed_work_sync(&bq->pump_express_work);
 
 	if (bq->id >= 0) {
@@ -1457,6 +1556,17 @@ static void bq25890_non_devm_cleanup(void *data)
 		idr_remove(&bq25890_id, bq->id);
 		mutex_unlock(&bq25890_id_mutex);
 	}
+}
+
+static void bq25890_poll_work(struct work_struct *work)
+{
+	struct bq25890_device *bq = container_of(to_delayed_work(work),
+						struct bq25890_device, poll_work);
+
+	mutex_lock(&bq->lock);
+	__bq25890_handle_irq(bq);
+	mutex_unlock(&bq->lock);
+	schedule_delayed_work(&bq->poll_work, msecs_to_jiffies(bq->poll_interval_ms));
 }
 
 static int bq25890_probe(struct i2c_client *client)
@@ -1497,6 +1607,9 @@ static int bq25890_probe(struct i2c_client *client)
 	ret = bq25890_fw_probe(bq);
 	if (ret < 0)
 		return dev_err_probe(dev, ret, "reading device properties\n");
+	/* The hardware watchdog can reset settings behind regmap's cache. */
+	if (bq->watchdog_ms)
+		regcache_cache_bypass(bq->rmap, true);
 
 	ret = bq25890_hw_init(bq);
 	if (ret < 0) {
@@ -1504,7 +1617,8 @@ static int bq25890_probe(struct i2c_client *client)
 		return ret;
 	}
 
-	if (client->irq <= 0)
+	INIT_DELAYED_WORK(&bq->poll_work, bq25890_poll_work);
+	if (client->irq <= 0 && !bq->poll_interval_ms)
 		client->irq = bq25890_irq_probe(bq);
 
 	if (client->irq < 0) {
@@ -1531,12 +1645,16 @@ static int bq25890_probe(struct i2c_client *client)
 	if (ret < 0)
 		return dev_err_probe(dev, ret, "registering power supply\n");
 
-	ret = devm_request_threaded_irq(dev, client->irq, NULL,
-					bq25890_irq_handler_thread,
-					IRQF_TRIGGER_FALLING | IRQF_ONESHOT,
-					BQ25890_IRQ_PIN, bq);
-	if (ret)
-		return ret;
+	if (client->irq > 0) {
+		ret = devm_request_threaded_irq(dev, client->irq, NULL,
+					      bq25890_irq_handler_thread,
+					      IRQF_TRIGGER_FALLING | IRQF_ONESHOT,
+					      BQ25890_IRQ_PIN, bq);
+		if (ret)
+			return ret;
+	}
+	if (bq->poll_interval_ms)
+		schedule_delayed_work(&bq->poll_work, msecs_to_jiffies(bq->poll_interval_ms));
 
 	if (!IS_ERR_OR_NULL(bq->usb_phy)) {
 		INIT_WORK(&bq->usb_work, bq25890_usb_work);
@@ -1551,6 +1669,7 @@ static void bq25890_remove(struct i2c_client *client)
 {
 	struct bq25890_device *bq = i2c_get_clientdata(client);
 
+	cancel_delayed_work_sync(&bq->poll_work);
 	if (!IS_ERR_OR_NULL(bq->usb_phy)) {
 		usb_unregister_notifier(bq->usb_phy, &bq->usb_nb);
 		cancel_work_sync(&bq->usb_work);
@@ -1566,6 +1685,11 @@ static void bq25890_shutdown(struct i2c_client *client)
 {
 	struct bq25890_device *bq = i2c_get_clientdata(client);
 
+	cancel_delayed_work_sync(&bq->poll_work);
+	if (bq->initial_charge_inhibit) {
+		bq25890_field_write(bq, F_CHG_CFG, 0);
+		bq25890_field_write(bq, F_WD, 0);
+	}
 	/*
 	 * TODO this if + return should probably be removed, but that would
 	 * introduce a function change for boards using the usb-phy framework.
@@ -1593,6 +1717,7 @@ static int bq25890_suspend(struct device *dev)
 	 * If charger is removed, while in suspend, make sure ADC is diabled
 	 * since it consumes slightly more power.
 	 */
+	cancel_delayed_work_sync(&bq->poll_work);
 	return bq25890_field_write(bq, F_CONV_RATE, 0);
 }
 
@@ -1619,6 +1744,8 @@ static int bq25890_resume(struct device *dev)
 
 unlock:
 	mutex_unlock(&bq->lock);
+	if (bq->poll_interval_ms)
+		schedule_delayed_work(&bq->poll_work, 0);
 
 	return ret;
 }

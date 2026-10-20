@@ -13,7 +13,10 @@
 #include <linux/interrupt.h>
 #include <linux/kernel.h>
 #include <linux/module.h>
+#include <linux/mutex.h>
+#include <linux/power_supply.h>
 #include <linux/regmap.h>
+#include <linux/workqueue.h>
 #include <linux/usb/typec.h>
 #include <linux/usb/typec_altmode.h>
 #include <linux/usb/role.h>
@@ -83,6 +86,15 @@ struct tusb320_priv {
 	enum typec_pwr_opmode pwr_opmode;
 	struct fwnode_handle *connector_fwnode;
 	struct usb_role_switch *role_sw;
+	struct power_supply *source;
+	struct power_supply_desc source_desc;
+	struct delayed_work poll_work;
+	struct mutex lock;
+	u32 poll_interval_ms;
+	bool skip_reset;
+	bool source_valid;
+	u8 source_status;
+	u8 source_current;
 };
 
 static const char * const tusb_attached_states[] = {
@@ -97,6 +109,73 @@ static const unsigned int tusb320_extcon_cable[] = {
 	EXTCON_USB_HOST,
 	EXTCON_NONE,
 };
+
+static int tusb320_source_get_property(struct power_supply *psy,
+				      enum power_supply_property prop,
+				      union power_supply_propval *val)
+{
+	struct tusb320_priv *priv = power_supply_get_drvdata(psy);
+	unsigned int reg8, reg9;
+	int ret, mode;
+	bool attached;
+
+	ret = regmap_read(priv->regmap, TUSB320_REG9, &reg9);
+	if (ret)
+		return ret;
+	ret = regmap_read(priv->regmap, TUSB320_REG8, &reg8);
+	if (ret)
+		return ret;
+	attached = FIELD_GET(TUSB320_REG9_ATTACHED_STATE, reg9) ==
+		   TUSB320_ATTACHED_STATE_UFP;
+	mode = FIELD_GET(TUSB320_REG8_CURRENT_MODE_DETECT, reg8);
+	switch (prop) {
+	case POWER_SUPPLY_PROP_ONLINE:
+		val->intval = attached;
+		break;
+	case POWER_SUPPLY_PROP_CURRENT_MAX:
+		if (!attached)
+			val->intval = 0;
+		else if (mode == TUSB320_REG8_CURRENT_MODE_DETECT_HI)
+			val->intval = 3000000;
+		else if (mode == TUSB320_REG8_CURRENT_MODE_DETECT_MED)
+			val->intval = 1500000;
+		else
+			val->intval = 500000;
+		break;
+	case POWER_SUPPLY_PROP_USB_TYPE:
+		val->intval = POWER_SUPPLY_USB_TYPE_C;
+		break;
+	default:
+		return -EINVAL;
+	}
+	return 0;
+}
+
+static const enum power_supply_property tusb320_source_properties[] = {
+	POWER_SUPPLY_PROP_ONLINE,
+	POWER_SUPPLY_PROP_CURRENT_MAX,
+	POWER_SUPPLY_PROP_USB_TYPE,
+};
+
+static int tusb320_source_register(struct tusb320_priv *priv)
+{
+	struct power_supply_config config = {
+		.drv_data = priv,
+		.fwnode = dev_fwnode(priv->dev),
+	};
+
+	priv->source_desc.name = devm_kasprintf(priv->dev, GFP_KERNEL,
+					      "tusb320-source-%s", dev_name(priv->dev));
+	if (!priv->source_desc.name)
+		return -ENOMEM;
+	priv->source_desc.type = POWER_SUPPLY_TYPE_USB_TYPE_C;
+	priv->source_desc.usb_types = BIT(POWER_SUPPLY_USB_TYPE_C);
+	priv->source_desc.properties = tusb320_source_properties;
+	priv->source_desc.num_properties = ARRAY_SIZE(tusb320_source_properties);
+	priv->source_desc.get_property = tusb320_source_get_property;
+	priv->source = devm_power_supply_register(priv->dev, &priv->source_desc, &config);
+	return PTR_ERR_OR_ZERO(priv->source);
+}
 
 static int tusb320_check_signature(struct tusb320_priv *priv)
 {
@@ -371,17 +450,34 @@ static void tusb320_typec_irq_handler(struct tusb320_priv *priv, u8 reg9)
 		typec_set_pwr_opmode(port, TYPEC_PWR_MODE_USB);
 }
 
-static irqreturn_t tusb320_state_update_handler(struct tusb320_priv *priv,
+static irqreturn_t __tusb320_state_update_handler(struct tusb320_priv *priv,
 						bool force_update)
 {
-	unsigned int reg;
+	unsigned int reg, reg8;
+	u8 status, current_mode;
+	bool changed;
 
 	if (regmap_read(priv->regmap, TUSB320_REG9, &reg)) {
-		dev_err(priv->dev, "error during i2c read!\n");
+		if (priv->source && priv->source_valid) {
+			priv->source_valid = false;
+			power_supply_changed(priv->source);
+		}
+		dev_err_ratelimited(priv->dev, "error during i2c read!\n");
 		return IRQ_NONE;
 	}
 
-	if (!force_update && !(reg & TUSB320_REG9_INTERRUPT_STATUS))
+	if (regmap_read(priv->regmap, TUSB320_REG8, &reg8)) {
+		if (priv->source && priv->source_valid) {
+			priv->source_valid = false;
+			power_supply_changed(priv->source);
+		}
+		return IRQ_NONE;
+	}
+	status = reg & (TUSB320_REG9_ATTACHED_STATE | TUSB320_REG9_CABLE_DIRECTION);
+	current_mode = reg8 & TUSB320_REG8_CURRENT_MODE_DETECT;
+	changed = !priv->source_valid || priv->source_status != status ||
+		  priv->source_current != current_mode;
+	if (!force_update && !changed && !(reg & TUSB320_REG9_INTERRUPT_STATUS))
 		return IRQ_NONE;
 
 	tusb320_extcon_irq_handler(priv, reg);
@@ -394,8 +490,24 @@ static irqreturn_t tusb320_state_update_handler(struct tusb320_priv *priv,
 		tusb320_typec_irq_handler(priv, reg);
 
 	regmap_write(priv->regmap, TUSB320_REG9, reg);
+	priv->source_status = status;
+	priv->source_current = current_mode;
+	priv->source_valid = true;
+	if (priv->source && changed)
+		power_supply_changed(priv->source);
 
 	return IRQ_HANDLED;
+}
+
+static irqreturn_t tusb320_state_update_handler(struct tusb320_priv *priv,
+					       bool force_update)
+{
+	irqreturn_t ret;
+
+	mutex_lock(&priv->lock);
+	ret = __tusb320_state_update_handler(priv, force_update);
+	mutex_unlock(&priv->lock);
+	return ret;
 }
 
 static irqreturn_t tusb320_irq_handler(int irq, void *dev_id)
@@ -403,6 +515,15 @@ static irqreturn_t tusb320_irq_handler(int irq, void *dev_id)
 	struct tusb320_priv *priv = dev_id;
 
 	return tusb320_state_update_handler(priv, false);
+}
+
+static void tusb320_poll_work(struct work_struct *work)
+{
+	struct tusb320_priv *priv = container_of(to_delayed_work(work),
+						struct tusb320_priv, poll_work);
+
+	tusb320_state_update_handler(priv, false);
+	schedule_delayed_work(&priv->poll_work, msecs_to_jiffies(priv->poll_interval_ms));
 }
 
 static const struct regmap_config tusb320_regmap_config = {
@@ -465,9 +586,11 @@ static int tusb320_typec_probe(struct i2c_client *client,
 	priv->pwr_opmode = ret;
 
 	/* Initialize the hardware with the devicetree settings. */
-	ret = tusb320_set_adv_pwr_mode(priv);
-	if (ret)
-		goto err_put;
+	if (!priv->skip_reset) {
+		ret = tusb320_set_adv_pwr_mode(priv);
+		if (ret)
+			goto err_put;
+	}
 
 	priv->cap.revision		= USB_TYPEC_REV_1_1;
 	priv->cap.accessory[0]		= TYPEC_ACCESSORY_AUDIO;
@@ -487,7 +610,10 @@ static int tusb320_typec_probe(struct i2c_client *client,
 	priv->role_sw = fwnode_usb_role_switch_get(connector);
 	if (IS_ERR(priv->role_sw)) {
 		ret = PTR_ERR(priv->role_sw);
-		goto err_unreg;
+		if (ret != -ENODEV)
+			goto err_unreg;
+		/* A sink-only port can keep its fixed peripheral controller role. */
+		priv->role_sw = NULL;
 	}
 
 	priv->connector_fwnode = connector;
@@ -505,6 +631,8 @@ err_put:
 
 static void tusb320_typec_remove(struct tusb320_priv *priv)
 {
+	if (!priv->port)
+		return;
 	usb_role_switch_put(priv->role_sw);
 	typec_unregister_port(priv->port);
 	fwnode_handle_put(priv->connector_fwnode);
@@ -524,6 +652,13 @@ static int tusb320_probe(struct i2c_client *client)
 		return -ENOMEM;
 
 	priv->dev = &client->dev;
+	mutex_init(&priv->lock);
+	priv->skip_reset = device_property_read_bool(priv->dev, "linux,skip-reset");
+	device_property_read_u32(priv->dev, "linux,poll-interval-ms", &priv->poll_interval_ms);
+	if (priv->poll_interval_ms &&
+	    (priv->poll_interval_ms < 20 || priv->poll_interval_ms > 1000))
+		return -EINVAL;
+	INIT_DELAYED_WORK(&priv->poll_work, tusb320_poll_work);
 	i2c_set_clientdata(client, priv);
 
 	priv->regmap = devm_regmap_init_i2c(client, &tusb320_regmap_config);
@@ -556,12 +691,17 @@ static int tusb320_probe(struct i2c_client *client)
 	ret = tusb320_typec_probe(client, priv);
 	if (ret)
 		return ret;
+	ret = tusb320_source_register(priv);
+	if (ret) {
+		tusb320_typec_remove(priv);
+		return ret;
+	}
 
 	/* update initial state */
 	tusb320_state_update_handler(priv, true);
 
 	/* Reset chip to its default state */
-	ret = tusb320_reset(priv);
+	ret = priv->skip_reset ? 0 : tusb320_reset(priv);
 	if (ret)
 		dev_warn(priv->dev, "failed to reset chip: %d\n", ret);
 	else
@@ -575,12 +715,17 @@ static int tusb320_probe(struct i2c_client *client)
 	if (irq_d)
 		irq_trigger_type = irqd_get_trigger_type(irq_d);
 
-	ret = devm_request_threaded_irq(priv->dev, client->irq, NULL,
+	if (client->irq > 0)
+		ret = devm_request_threaded_irq(priv->dev, client->irq, NULL,
 					tusb320_irq_handler,
 					IRQF_ONESHOT | irq_trigger_type,
 					client->name, priv);
+	else if (!priv->poll_interval_ms)
+		ret = -EINVAL;
 	if (ret)
 		tusb320_typec_remove(priv);
+	else if (priv->poll_interval_ms)
+		schedule_delayed_work(&priv->poll_work, msecs_to_jiffies(priv->poll_interval_ms));
 
 	return ret;
 }
@@ -589,6 +734,7 @@ static void tusb320_remove(struct i2c_client *client)
 {
 	struct tusb320_priv *priv = i2c_get_clientdata(client);
 
+	cancel_delayed_work_sync(&priv->poll_work);
 	tusb320_typec_remove(priv);
 }
 

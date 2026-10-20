@@ -12,6 +12,7 @@
 #include <linux/bits.h>
 #include <linux/delay.h>
 #include <linux/i2c.h>
+#include <linux/iio/consumer.h>
 #include <linux/gfp.h>
 #include <linux/gpio/consumer.h>
 #include <linux/kernel.h>
@@ -64,6 +65,8 @@ struct cw_battery {
 	struct power_supply *rk_bat;
 	struct power_supply_battery_info *battery;
 	u8 *bat_profile;
+	struct iio_channel *current_chan;
+	struct iio_channel *temperature;
 
 	bool charger_attached;
 	bool battery_changed;
@@ -174,7 +177,7 @@ static int cw_init(struct cw_battery *cw_bat)
 	if ((reg_val & CW2015_MASK_ATHD) != CW2015_ATHD(cw_bat->alert_level)) {
 		dev_dbg(cw_bat->dev, "Setting new alert level\n");
 		reg_val &= ~CW2015_MASK_ATHD;
-		reg_val |= ~CW2015_ATHD(cw_bat->alert_level);
+		reg_val |= CW2015_ATHD(cw_bat->alert_level);
 		ret = regmap_write(cw_bat->regmap, CW2015_REG_CONFIG, reg_val);
 		if (ret)
 			return ret;
@@ -389,9 +392,14 @@ static void cw_update_voltage(struct cw_battery *cw_bat)
 
 static void cw_update_status(struct cw_battery *cw_bat)
 {
+	union power_supply_propval val;
 	int status = POWER_SUPPLY_STATUS_DISCHARGING;
 
-	if (cw_bat->charger_attached) {
+	if (cw_bat->charger_attached &&
+	    !power_supply_get_property_from_supplier(cw_bat->rk_bat,
+						    POWER_SUPPLY_PROP_STATUS, &val)) {
+		status = val.intval;
+	} else if (cw_bat->charger_attached) {
 		if (cw_bat->soc >= 100)
 			status = POWER_SUPPLY_STATUS_FULL;
 		else
@@ -470,6 +478,7 @@ static int cw_battery_get_property(struct power_supply *psy,
 				   union power_supply_propval *val)
 {
 	struct cw_battery *cw_bat;
+	int ret, processed;
 
 	cw_bat = power_supply_get_drvdata(psy);
 	switch (psp) {
@@ -482,7 +491,15 @@ static int cw_battery_get_property(struct power_supply *psy,
 		break;
 
 	case POWER_SUPPLY_PROP_PRESENT:
-		val->intval = !!cw_bat->voltage_mv;
+		/* Charging policy must not treat a disconnected gauge as fresh data. */
+		if (cw_bat->temperature) {
+			processed = cw_get_voltage(cw_bat);
+			if (processed < 0)
+				return processed;
+			val->intval = processed > 0;
+		} else {
+			val->intval = !!cw_bat->voltage_mv;
+		}
 		break;
 
 	case POWER_SUPPLY_PROP_VOLTAGE_NOW:
@@ -517,7 +534,39 @@ static int cw_battery_get_property(struct power_supply *psy,
 		val->intval = val->intval * cw_bat->soc / 100;
 		break;
 
+	case POWER_SUPPLY_PROP_TEMP:
+		if (!cw_bat->temperature)
+			return -ENODATA;
+		ret = iio_read_channel_processed(cw_bat->temperature, &processed);
+		if (ret < 0)
+			return ret;
+		val->intval = processed / 100;
+		break;
+
+	case POWER_SUPPLY_PROP_HEALTH:
+		if (cw_bat->temperature) {
+			ret = iio_read_channel_processed(cw_bat->temperature, &processed);
+			if (ret < 0) {
+				val->intval = POWER_SUPPLY_HEALTH_UNKNOWN;
+				break;
+			}
+			if (processed <= 0 || processed >= 50000) {
+				val->intval = processed <= 0 ? POWER_SUPPLY_HEALTH_COLD :
+					POWER_SUPPLY_HEALTH_OVERHEAT;
+				break;
+			}
+		}
+		return power_supply_get_property_from_supplier(psy,
+						POWER_SUPPLY_PROP_HEALTH, val);
+
 	case POWER_SUPPLY_PROP_CURRENT_NOW:
+		if (cw_bat->current_chan) {
+			ret = iio_read_channel_processed_scale(cw_bat->current_chan, &processed, 1000);
+			if (ret < 0)
+				return ret;
+			val->intval = processed;
+			break;
+		}
 		if (cw_battery_valid_time_to_empty(cw_bat) &&
 		    cw_bat->battery->charge_full_design_uah > 0) {
 			/* calculate remaining capacity */
@@ -533,7 +582,7 @@ static int cw_battery_get_property(struct power_supply *psy,
 		break;
 
 	default:
-		break;
+		return -EINVAL;
 	}
 	return 0;
 }
@@ -550,6 +599,8 @@ static enum power_supply_property cw_battery_properties[] = {
 	POWER_SUPPLY_PROP_CHARGE_FULL_DESIGN,
 	POWER_SUPPLY_PROP_CHARGE_NOW,
 	POWER_SUPPLY_PROP_CURRENT_NOW,
+	POWER_SUPPLY_PROP_TEMP,
+	POWER_SUPPLY_PROP_HEALTH,
 };
 
 static const struct power_supply_desc cw2015_bat_desc = {
@@ -653,6 +704,14 @@ static int cw_bat_probe(struct i2c_client *client)
 	i2c_set_clientdata(client, cw_bat);
 	cw_bat->dev = &client->dev;
 	cw_bat->soc = 1;
+	if (device_property_present(cw_bat->dev, "io-channels")) {
+		cw_bat->current_chan = devm_iio_channel_get(cw_bat->dev, "current");
+		if (IS_ERR(cw_bat->current_chan))
+			return dev_err_probe(cw_bat->dev, PTR_ERR(cw_bat->current_chan), "current sensor\n");
+		cw_bat->temperature = devm_iio_channel_get(cw_bat->dev, "temperature");
+		if (IS_ERR(cw_bat->temperature))
+			return dev_err_probe(cw_bat->dev, PTR_ERR(cw_bat->temperature), "temperature sensor\n");
+	}
 
 	ret = cw2015_parse_properties(cw_bat);
 	if (ret) {
@@ -673,6 +732,9 @@ static int cw_bat_probe(struct i2c_client *client)
 		return ret;
 	}
 
+	cw_bat->battery = devm_kzalloc(&client->dev, sizeof(*cw_bat->battery), GFP_KERNEL);
+	if (!cw_bat->battery)
+		return -ENOMEM;
 	psy_cfg.drv_data = cw_bat;
 	psy_cfg.fwnode = dev_fwnode(cw_bat->dev);
 
@@ -698,7 +760,7 @@ static int cw_bat_probe(struct i2c_client *client)
 			 "No monitored battery, some properties will be missing\n");
 	}
 
-	cw_bat->battery_workqueue = create_singlethread_workqueue("rk_battery");
+	cw_bat->battery_workqueue = system_freezable_wq;
 	if (!cw_bat->battery_workqueue)
 		return -ENOMEM;
 

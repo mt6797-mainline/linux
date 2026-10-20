@@ -10,6 +10,8 @@
 	compatible = "leeco,x620", "mediatek,mt6797";
 	aliases {
 		mmc0 = &msdc0;
+		i2c0 = &i2c0;
+		i2c5 = &i2c5;
 		i2c4 = &i2c4;
 		i2c6 = &i2c6;
 		ovl0 = &disp_ovl0;
@@ -79,6 +81,27 @@
 	};
 
 
+	battery: battery {
+		compatible = "simple-battery";
+		device-chemistry = "lithium-ion";
+		charge-full-design-microamp-hours = <3000000>;
+		voltage-min-design-microvolt = <3400000>;
+		voltage-max-design-microvolt = <4400000>;
+		constant-charge-current-max-microamp = <1500000>;
+		constant-charge-voltage-max-microvolt = <4400000>;
+		charge-term-current-microamp = <150000>;
+	};
+
+	charger_policy: charger {
+		compatible = "mediatek,mt6797-x620-charger";
+		primary-charger = <&charger_primary>;
+		secondary-charger = <&charger_secondary>;
+		battery-gauge = <&fuel_gauge>;
+		typec-current-source = <&typec_cc>;
+		power-supplies = <&typec_cc>;
+		#cooling-cells = <2>;
+	};
+
 	devinfo: devinfo {
 		compatible = "mediatek,mt6797-lk-devinfo";
 		memory-region = <&lk_dtb>;
@@ -132,6 +155,8 @@
 				critical { temperature = <117000>; hysteresis = <0>; type = "critical"; };
 			};
 			cooling-maps {
+				map-charge-warm { trip = <&soc_warm>; cooling-device = <&charger_policy 1 2>; };
+				map-charge-hot { trip = <&soc_hot>; cooling-device = <&charger_policy 3 3>; };
 				map-warm { trip = <&soc_warm>; cooling-device = <&cpu0 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>, <&cpu4 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>; };
 				map-hot { trip = <&soc_hot>; cooling-device = <&cpu0 3 THERMAL_NO_LIMIT>, <&cpu4 3 THERMAL_NO_LIMIT>; };
 				map-very-hot { trip = <&soc_very_hot>; cooling-device = <&cpu0 12 THERMAL_NO_LIMIT>, <&cpu4 12 THERMAL_NO_LIMIT>; };
@@ -154,6 +179,15 @@
 		mediatek,retain-bootloader-state;
 		pmic_mt6351: pmic {
 			compatible = "mediatek,mt6351";
+			battery_adc: battery-adc {
+				compatible = "mediatek,mt6351-battery-adc";
+				#io-channel-cells = <1>;
+				/* Live stock bat_metter: Rfg=10, CAR_TUNE=118, 24k/2.8V NTC. */
+				mediatek,sense-resistor-milliohm = <10>;
+				mediatek,car-tune-percent = <118>;
+				mediatek,ntc-pullup-ohms = <24000>;
+				mediatek,ntc-pullup-millivolt = <2800>;
+			};
 			regulators {
 				vcn18: ldo_vcn18 {
 					regulator-name = "vcn18";
@@ -551,5 +585,94 @@
 			};
 			BUCKB { regulator-name = "vproc2"; regulator-boot-on; regulator-always-on; };
 		};
+	};
+};
+
+/* Stock runtime logs identify BQ25890 (PN=3), BQ25892 (PN=0, rev=1), CW2015 at 5-0062.
+ * Poll both chargers until the board's EIC interrupt routing is verified.
+ */
+&i2c0 {
+	compatible = "mediatek,mt6797-i2c";
+	clocks = <&infra_clocks CLK_INFRA_I2C0>, <&infra_clocks CLK_INFRA_AP_DMA>;
+	clock-names = "main", "dma";
+	clock-frequency = <100000>;
+	clock-div = <10>;
+	pinctrl-names = "default";
+	pinctrl-0 = <&i2c0_pins_a>;
+	status = "okay";
+
+	charger_primary: charger@6a {
+		compatible = "ti,bq25890";
+		reg = <0x6a>;
+		monitored-battery = <&battery>;
+		ti,charge-current = <1500000>;
+		ti,battery-regulation-voltage = <4400000>;
+		ti,termination-current = <150000>;
+		ti,precharge-current = <128000>;
+		ti,minimum-sys-voltage = <3500000>;
+		ti,boost-voltage = <4998000>;
+		ti,boost-max-current = <1400000>;
+		ti,thermal-regulation-threshold = <120>;
+		ti,disable-high-voltage;
+		ti,watchdog-timeout-ms = <40000>;
+		linux,skip-reset;
+		linux,initial-charge-inhibit;
+		linux,poll-interval-ms = <2000>;
+	};
+
+	charger_secondary: charger@6b {
+		compatible = "ti,bq25892";
+		reg = <0x6b>;
+		monitored-battery = <&battery>;
+		ti,charge-current = <1500000>;
+		ti,battery-regulation-voltage = <4400000>;
+		ti,termination-current = <150000>;
+		ti,precharge-current = <128000>;
+		ti,minimum-sys-voltage = <3500000>;
+		ti,boost-voltage = <4998000>;
+		ti,boost-max-current = <1400000>;
+		ti,thermal-regulation-threshold = <120>;
+		ti,disable-high-voltage;
+		linux,skip-reset;
+		linux,initial-charge-inhibit;
+		linux,initial-hiz;
+		linux,poll-interval-ms = <2000>;
+	};
+};
+
+&i2c5 {
+	compatible = "mediatek,mt6797-i2c";
+	clocks = <&infra_clocks CLK_INFRA_I2C5>, <&infra_clocks CLK_INFRA_AP_DMA>;
+	clock-names = "main", "dma";
+	clock-frequency = <100000>;
+	clock-div = <10>;
+	pinctrl-names = "default";
+	pinctrl-0 = <&i2c5_pins_a>;
+	status = "okay";
+
+	typec_cc: typec@47 {
+		compatible = "ti,tusb320";
+		reg = <0x47>;
+		/* Retain the stock PORT-pin/DRP setup; do not detach an active source. */
+		linux,skip-reset;
+		linux,poll-interval-ms = <100>;
+		connector {
+			compatible = "usb-c-connector";
+			label = "USB-C";
+			power-role = "sink";
+			data-role = "device";
+			typec-power-opmode = "default";
+		};
+	};
+
+	fuel_gauge: fuel-gauge@62 {
+		compatible = "cellwise,cw2015";
+		reg = <0x62>;
+		monitored-battery = <&battery>;
+		power-supplies = <&charger_primary>;
+		/* Keep the factory-programmed CW2015 battery profile. */
+		cellwise,monitor-interval-ms = <5000>;
+		io-channels = <&battery_adc 0>, <&battery_adc 2>;
+		io-channel-names = "current", "temperature";
 	};
 };

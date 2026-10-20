@@ -1650,4 +1650,11 @@ config XILINX_AMS
 	  The driver can also be built as a module. If so, the module will be called
 	  xilinx-ams.
 
+config MT6351_BATTERY_ADC
+	tristate "MT6351 battery ADC and current sensor"
+	depends on OF && REGMAP
+	help
+	  Battery voltage, BATON thermistor and signed fuel-gauge current
+	  from the MT6351 PMIC used with MT6797.
+
 endmenu

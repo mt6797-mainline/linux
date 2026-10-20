@@ -3,6 +3,7 @@
 #include <linux/module.h>
 #include <linux/mutex.h>
 #include <linux/of.h>
+#include <linux/of_platform.h>
 #include <linux/platform_device.h>
 #include <linux/regmap.h>
 #include <linux/regulator/driver.h>
@@ -85,6 +86,9 @@ static int mt6351_vcn_probe(struct platform_device *pdev)
 			return dev_err_probe(dev, PTR_ERR(rdev), "register %s\n",
 					     mt6351_vcn_descs[i].name);
 	}
+	ret = devm_of_platform_populate(dev);
+	if (ret)
+		return ret;
 	mutex_lock(&mt6351_vcn_lock);
 	if (mt6351_vcn_map) {
 		mutex_unlock(&mt6351_vcn_lock);

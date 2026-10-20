@@ -197,6 +197,7 @@ config EXTCON_USBC_CROS_EC
 config EXTCON_USBC_TUSB320
 	tristate "TI TUSB320 USB-C extcon support"
 	depends on I2C && TYPEC
+	depends on POWER_SUPPLY
 	select REGMAP_I2C
 	depends on USB_ROLE_SWITCH || !USB_ROLE_SWITCH
 	help
