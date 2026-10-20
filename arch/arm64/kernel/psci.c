@@ -14,6 +14,7 @@
 #include <linux/delay.h>
 #include <linux/psci.h>
 #include <linux/mm.h>
+#include <linux/soc/mediatek/mt6797-a72.h>
 
 #include <uapi/linux/psci.h>
 
@@ -41,12 +42,17 @@ static int cpu_psci_cpu_boot(unsigned int cpu)
 	phys_addr_t pa_secondary_entry = __pa_symbol(secondary_entry);
 	int err;
 
+	err = mt6797_a72_prepare(cpu);
+	if (err)
+		return err;
+
 	if (IS_ENABLED(CONFIG_X620_RELAY_DIAGNOSTICS))
 		pr_info("X620_CPU_ON: CPU%u MPIDR=%llx entry=%pa\n",
 			cpu, cpu_logical_map(cpu), &pa_secondary_entry);
 	err = psci_ops.cpu_on(cpu_logical_map(cpu), pa_secondary_entry);
 	if (IS_ENABLED(CONFIG_X620_RELAY_DIAGNOSTICS))
 		pr_info("X620_CPU_ON_RETURN: CPU%u ret=%d\n", cpu, err);
+	mt6797_a72_finish(cpu, err);
 	if (err && err != -EPERM)
 		pr_err("failed to boot CPU%d (%d)\n", cpu, err);
 
@@ -102,6 +108,7 @@ static int cpu_psci_cpu_kill(unsigned int cpu)
 	do {
 		err = psci_ops.affinity_info(cpu_logical_map(cpu), 0);
 		if (err == PSCI_0_2_AFFINITY_LEVEL_OFF) {
+			mt6797_a72_power_off(cpu);
 			pr_info("CPU%d killed (polled %d ms)\n", cpu,
 				jiffies_to_msecs(jiffies - start));
 			return 0;

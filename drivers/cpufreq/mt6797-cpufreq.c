@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0-only
-/* MT6797 LL/L/CCI DVFS using the stock shared rail and MCU FHCTL sequence. */
+/* MT6797 LL/L/B/CCI DVFS using stock rail, MCU FHCTL and SiP sequences. */
 #include <linux/arm-smccc.h>
 #include <linux/cpu.h>
 #include <linux/cpufreq.h>
@@ -14,6 +14,7 @@
 #include <linux/regmap.h>
 #include <linux/regulator/consumer.h>
 #include <linux/seq_file.h>
+#include <linux/soc/mediatek/mt6797-a72.h>
 #include <linux/thermal.h>
 #include <asm/smp_plat.h>
 #include "mt6797-opp.h"
@@ -44,12 +45,29 @@ struct mt6797_dvfs {
 	struct mutex lock;
 	spinlock_t mcu_lock;
 	const struct mt6797_opp (*opps)[16];
-	struct cpufreq_frequency_table tables[2][17];
-	unsigned int index[3], khz[3], bin;
+	struct mt6797_opp big_opps[16];
+	struct cpufreq_frequency_table tables[4][17];
+	unsigned int index[4], khz[4], bin, date;
 	bool fault;
 	struct dentry *debug;
 };
 static struct mt6797_dvfs *mt6797_dvfs;
+
+static u32 mt6797_big_read(u32 offset)
+{
+	struct arm_smccc_res res;
+
+	arm_smccc_smc(0xc200035f, 0x10222000 + offset, 0, 0, 0, 0, 0, 0, &res);
+	return res.a0;
+}
+
+static int mt6797_big_write(u32 offset, u32 value)
+{
+	struct arm_smccc_res res;
+
+	arm_smccc_smc(0xc200035e, 0x10222000 + offset, value, 0, 0, 0, 0, 0, &res);
+	return (s32)res.a0 < 0 ? -EIO : 0;
+}
 
 /* Stock silicon workaround: 200 ns, consecutive reads, bounded write retry. */
 static u32 mt6797_mcu_read(struct mt6797_dvfs *d, u32 offset)
@@ -130,6 +148,92 @@ static unsigned int mt6797_pll_khz(struct mt6797_dvfs *d, unsigned int id)
 		return khz * (30 - div) / 6;
 	/* Stock treats reset/default divider encodings as divide-by-one. */
 	return khz;
+}
+
+static unsigned int mt6797_big_khz(struct mt6797_dvfs *d)
+{
+	u32 con0, con1, div;
+	unsigned long flags;
+	u64 khz;
+
+	if (mt6797_mcu_lock(d, &flags))
+		return 0;
+	con0 = mt6797_big_read(0x4a0);
+	con1 = mt6797_big_read(0x4a4);
+	div = mt6797_mcu_read(d, PLL_DIV) & 31;
+	mt6797_mcu_unlock(d, flags);
+	if (!(con0 & 1) || !con1)
+		return 0;
+	khz = DIV_ROUND_CLOSEST_ULL((u64)(con1 & GENMASK(30, 0)) * 26000,
+				  BIT_ULL(24 + ((con0 >> 12) & 7)));
+	if (div == 10)
+		khz /= 2;
+	else if (div != 8 && div != 0 && div != 16 && div != 24)
+		return 0;
+	return khz;
+}
+
+static int mt6797_big_dcm(unsigned int khz)
+{
+	u32 value = mt6797_big_read(0x274);
+	int ret;
+
+	ret = mt6797_big_write(0x274, value & ~BIT(1));
+	if (ret)
+		return ret;
+	value = (value & ~GENMASK(6, 0)) | BIT(0) | BIT(1) |
+		(min(khz / 70000, 31U) << 2);
+	ret = mt6797_big_write(0x274, value);
+	if (ret)
+		return ret;
+	return (mt6797_big_read(0x274) & ~BIT(1)) == (value & ~BIT(1)) ? 0 : -EIO;
+}
+
+static int mt6797_big_set_frequency(struct mt6797_dvfs *d,
+				  unsigned int khz, unsigned int clkdiv)
+{
+	struct arm_smccc_res res;
+	unsigned int old_khz = d->khz[3];
+	unsigned long flags;
+	int ret, err;
+
+	if (khz < old_khz) {
+		ret = mt6797_big_dcm(khz);
+		if (ret)
+			return ret;
+	}
+	ret = mt6797_mcu_lock(d, &flags);
+	if (ret)
+		return ret;
+	/* Factory adjust_armpll_dds(): MAINPLL must supply the running A72s. */
+	ret = regmap_update_bits(d->top, 0x104, GENMASK(5, 4), GENMASK(5, 4));
+	if (ret)
+		goto unlock;
+	ret = mt6797_mcu_update(d, PLL_MUX, 3, 2);
+	if (ret)
+		goto unlock;
+	ret = mt6797_mcu_update(d, PLL_DIV, 31, clkdiv == 2 ? 10 : 8);
+	if (ret)
+		goto unlock;
+	arm_smccc_smc(0xc20003b8, khz * clkdiv / 1000, 0, 0, 0, 0, 0, 0, &res);
+	if ((s32)res.a0 < 0) {
+		ret = -EIO;
+		goto unlock; /* Keep MAINPLL and its parking voltage on failure. */
+	}
+	udelay(20);
+	ret = mt6797_mcu_update(d, PLL_MUX, 3, 1);
+	if (ret)
+		goto unlock;
+	ret = regmap_update_bits(d->top, 0x104, GENMASK(5, 4), 0);
+unlock:
+	mt6797_mcu_unlock(d, flags);
+	if (ret)
+		return ret;
+	d->khz[3] = mt6797_big_khz(d);
+	if (d->khz[3] != khz)
+		return -EIO;
+	err = mt6797_big_dcm(khz);
+	return err;
 }
 static int mt6797_sram_get(struct mt6797_dvfs *d)
 {
@@ -367,31 +471,54 @@ unlock:
 
 static int mt6797_cluster(unsigned int cpu)
 {
-	return MPIDR_AFFINITY_LEVEL(cpu_logical_map(cpu), 1);
+	int id = MPIDR_AFFINITY_LEVEL(cpu_logical_map(cpu), 1);
+
+	/* Domain 2 is CCI; the A72 CPU cluster uses domain 3 here. */
+	return id == 2 ? 3 : id;
+}
+
+static bool mt6797_big_online(void)
+{
+	unsigned int cpu;
+
+	for_each_online_cpu(cpu)
+		if (mt6797_cluster(cpu) == 3)
+			return true;
+	return false;
 }
 static unsigned int mt6797_get(unsigned int cpu)
 {
 	struct mt6797_dvfs *d = mt6797_dvfs;
 	int id = mt6797_cluster(cpu);
 
-	return d && id < 2 ? mt6797_pll_khz(d, id) : 0;
+	if (!d)
+		return 0;
+	return id == 3 ? mt6797_big_khz(d) : id < 2 ? mt6797_pll_khz(d, id) : 0;
 }
 static int mt6797_target(struct cpufreq_policy *policy, unsigned int index)
 {
 	struct mt6797_dvfs *d = policy->driver_data;
 	int id = mt6797_cluster(policy->cpu), other = 1 - id;
 	unsigned int uv, cci = 0, freq;
-	int ret, current_uv;
+	int ret, current_uv, big_uv;
 
 	mutex_lock(&d->lock);
 	if (d->fault) {
 		ret = -EIO;
 		goto out;
 	}
-	freq = max(d->opps[id][index].khz, d->khz[other]) / 2;
+	if (id == 3) {
+		freq = max(d->big_opps[index].khz, max(d->khz[0], d->khz[1])) / 2;
+		uv = max(d->opps[0][d->index[0]].uv, d->opps[1][d->index[1]].uv);
+	} else {
+		freq = max(d->opps[id][index].khz, d->khz[other]);
+		if (mt6797_big_online())
+			freq = max(freq, d->khz[3]);
+		freq /= 2;
+		uv = max(d->opps[id][index].uv, d->opps[other][d->index[other]].uv);
+	}
 	while (cci < 15 && d->opps[2][cci + 1].khz >= freq)
 		cci++;
-	uv = max(d->opps[id][index].uv, d->opps[other][d->index[other]].uv);
 	uv = max(uv, d->opps[2][cci].uv);
 	/* Stock selects the fastest CCI OPP possible at the shared voltage. */
 	while (cci && d->opps[2][cci - 1].uv <= uv)
@@ -409,7 +536,25 @@ static int mt6797_target(struct cpufreq_policy *policy, unsigned int index)
 		if (ret)
 			goto fault;
 	}
-	ret = mt6797_set_frequency(d, id, index);
+	if (id == 3) {
+		big_uv = mt6797_a72_get_voltage();
+		if (big_uv < 0) {
+			ret = big_uv;
+			goto fault;
+		}
+		/* Stock raises VPROC2 to at least OPP9 before MAINPLL parking. */
+		big_uv = max3((unsigned int)big_uv, d->big_opps[index].uv, d->big_opps[9].uv);
+		ret = mt6797_a72_set_voltage(big_uv);
+		if (!ret)
+			ret = mt6797_big_set_frequency(d, d->big_opps[index].khz,
+						 d->big_opps[index].clkdiv);
+		if (!ret) {
+			d->index[3] = index;
+			ret = mt6797_a72_set_voltage(d->big_opps[index].uv);
+		}
+	} else {
+		ret = mt6797_set_frequency(d, id, index);
+	}
 	if (ret)
 		goto fault;
 	ret = mt6797_set_frequency(d, 2, cci);
@@ -433,8 +578,17 @@ static int mt6797_policy_init(struct cpufreq_policy *policy)
 	struct mt6797_dvfs *d = mt6797_dvfs;
 	int id = mt6797_cluster(policy->cpu), cpu;
 
-	if (id > 1)
+	if (id != 0 && id != 1 && id != 3)
 		return -ENODEV;
+	if (id == 3) {
+		if (mt6797_a72_get_voltage() < 0)
+			return -EPROBE_DEFER;
+		mutex_lock(&d->lock);
+		d->khz[3] = mt6797_big_khz(d);
+		mutex_unlock(&d->lock);
+		if (!d->khz[3])
+			return -EIO;
+	}
 	policy->driver_data = d;
 	cpumask_clear(policy->cpus);
 	for_each_possible_cpu(cpu)
@@ -445,6 +599,30 @@ static int mt6797_policy_init(struct cpufreq_policy *policy)
 	policy->transition_delay_us = 2000;
 	return 0;
 }
+
+static void mt6797_policy_exit(struct cpufreq_policy *policy)
+{
+	struct mt6797_dvfs *d = policy->driver_data;
+	int uv, ret;
+
+	if (mt6797_cluster(policy->cpu) != 3)
+		return;
+	mutex_lock(&d->lock);
+	if (d->fault)
+		goto out;
+	uv = mt6797_a72_get_voltage();
+	ret = uv < 0 ? uv : mt6797_a72_set_voltage(max(uv, 1000000));
+	if (!ret)
+		ret = mt6797_big_set_frequency(d, 750000, 1);
+	if (!ret)
+		ret = mt6797_a72_set_voltage(1000000);
+	if (ret) {
+		d->fault = true;
+		dev_err(d->dev, "A72 parking failed: %d; keeping reached rails\n", ret);
+	}
+out:
+	mutex_unlock(&d->lock);
+}
 static struct cpufreq_driver mt6797_cpufreq_driver = {
 	.name = "mt6797",
 	.flags = CPUFREQ_NEED_INITIAL_FREQ_CHECK | CPUFREQ_IS_COOLING_DEV,
@@ -452,6 +630,7 @@ static struct cpufreq_driver mt6797_cpufreq_driver = {
 	.target_index = mt6797_target,
 	.get = mt6797_get,
 	.init = mt6797_policy_init,
+	.exit = mt6797_policy_exit,
 	.attr = cpufreq_generic_attr,
 };
 
@@ -467,6 +646,13 @@ static int mt6797_dvfs_show(struct seq_file *s, void *unused)
 		seq_printf(s, "%s: actual=%u requested=%u kHz OPP=%u\n",
 			   id == 0 ? "LL" : id == 1 ? "L" : "CCI",
 			   mt6797_pll_khz(d, id), d->khz[id], d->index[id]);
+	if (mt6797_big_online())
+		seq_printf(s, "B: actual=%u requested=%u kHz OPP=%u VPROC2=%d VSRAM=%d uV DCM=%08x\n",
+			   mt6797_big_khz(d), d->khz[3], d->index[3],
+			   mt6797_a72_get_voltage(), mt6797_a72_get_sram_voltage(),
+			   mt6797_big_read(0x274));
+	else
+		seq_puts(s, "B: offline\n");
 	mutex_unlock(&d->lock);
 	return 0;
 }
@@ -481,7 +667,7 @@ static int mt6797_cpufreq_probe(struct platform_device *pdev)
 	__le32 *buf;
 	size_t len;
 	unsigned long flags;
-	u32 code, mux, pc;
+	u32 code, mux, pc, date;
 	int id, i, ret, temp, uv, sram;
 
 	if (mt6797_dvfs)
@@ -545,6 +731,29 @@ static int mt6797_cpufreq_probe(struct platform_device *pdev)
 	default: return dev_err_probe(dev, -EINVAL, "unknown factory function code %x\n", code);
 	}
 	d->opps = mt6797_opps[d->bin];
+	cell = devm_nvmem_cell_get(dev, "date-code");
+	if (IS_ERR(cell))
+		return dev_err_probe(dev, PTR_ERR(cell), "factory CPU date code not ready\n");
+	buf = nvmem_cell_read(cell, &len);
+	if (IS_ERR(buf))
+		return PTR_ERR(buf);
+	date = len == 4 ? (le32_to_cpu(*buf) >> 4) & 15 : 0xff;
+	kfree(buf);
+	if (date > 15)
+		return -EINVAL;
+	d->date = date >= 7;
+	memcpy(d->big_opps, mt6797_big_opps[d->date][d->bin], sizeof(d->big_opps));
+	/* Factory 0119 TT segment is encoded as function code 4. */
+	if (d->date && code == 4) {
+		d->big_opps[0].khz = 2587000;
+		d->big_opps[1].khz = 2431000;
+		d->big_opps[1].uv = 1180000;
+	}
+	for (i = 0; i < 16; i++)
+		d->tables[3][i].frequency = i &&
+			d->big_opps[i].khz == d->big_opps[i - 1].khz ?
+			CPUFREQ_ENTRY_INVALID : d->big_opps[i].khz;
+	d->tables[3][16].frequency = CPUFREQ_TABLE_END;
 	/* Do not fight an already running stock hybrid DVFS controller. */
 	pc = readl(d->cspm + 0x13c);
 	if (pc)
@@ -606,6 +815,8 @@ static int mt6797_cpufreq_probe(struct platform_device *pdev)
 	debugfs_create_file("state", 0444, d->debug, d, &mt6797_dvfs_fops);
 	dev_info(dev, "stock bin%u: LL %u / L %u / CCI %u kHz; temperature=%d mC\n",
 		 d->bin, d->opps[0][0].khz, d->opps[1][0].khz, d->opps[2][0].khz, temp);
+	dev_info(dev, "A72 stock date %s: %u..%u kHz, independent VPROC2\n",
+		 d->date ? "0119" : "1221", d->big_opps[15].khz, d->big_opps[0].khz);
 	return 0;
 }
 static void mt6797_cpufreq_remove(struct platform_device *pdev)

@@ -24,6 +24,7 @@
 #include <linux/nospec.h>
 #include <linux/prctl.h>
 #include <linux/sched/task_stack.h>
+#include <linux/soc/mediatek/mt6797-a72.h>
 
 #include <asm/debug-monitors.h>
 #include <asm/insn.h>
@@ -202,6 +203,8 @@ static enum mitigation_state spectre_v2_get_cpu_fw_mitigation_state(void)
 bool has_spectre_v2(const struct arm64_cpu_capabilities *entry, int scope)
 {
 	WARN_ON(scope != SCOPE_LOCAL_CPU || preemptible());
+	if (mt6797_a72_late_boot())
+		return true;
 
 	if (spectre_v2_get_cpu_hw_mitigation_state() == SPECTRE_UNAFFECTED)
 		return false;
@@ -312,6 +315,15 @@ void spectre_v2_enable_mitigation(const struct arm64_cpu_capabilities *__unused)
 	if (state == SPECTRE_VULNERABLE)
 		state = spectre_v2_enable_fw_mitigation();
 
+	/* Account for the known late A72s before the global state is frozen. */
+	if (mt6797_a72_late_boot() && !system_capabilities_finalized()) {
+		enum mitigation_state late = spectre_v2_get_cpu_fw_mitigation_state();
+
+		/* An unaffected A53 caller does not establish safety for an A72. */
+		if (late == SPECTRE_UNAFFECTED || spectre_v2_mitigations_off())
+			late = SPECTRE_VULNERABLE;
+		state = max(state, late);
+	}
 	update_mitigation_state(&spectre_v2_state, state);
 }
 
@@ -331,7 +343,8 @@ bool has_spectre_v3a(const struct arm64_cpu_capabilities *entry, int scope)
 	};
 
 	WARN_ON(scope != SCOPE_LOCAL_CPU || preemptible());
-	return is_midr_in_range_list(read_cpuid_id(), spectre_v3a_unsafe_list);
+	return mt6797_a72_late_boot() ||
+		is_midr_in_range_list(read_cpuid_id(), spectre_v3a_unsafe_list);
 }
 
 void spectre_v3a_enable_mitigation(const struct arm64_cpu_capabilities *__unused)
@@ -513,6 +526,8 @@ bool has_spectre_v4(const struct arm64_cpu_capabilities *cap, int scope)
 	enum mitigation_state state;
 
 	WARN_ON(scope != SCOPE_LOCAL_CPU || preemptible());
+	if (mt6797_a72_late_boot())
+		return true;
 
 	state = spectre_v4_get_cpu_hw_mitigation_state();
 	if (state == SPECTRE_VULNERABLE)
@@ -650,6 +665,13 @@ void spectre_v4_enable_mitigation(const struct arm64_cpu_capabilities *__unused)
 	if (state == SPECTRE_VULNERABLE)
 		state = spectre_v4_enable_fw_mitigation();
 
+	if (mt6797_a72_late_boot() && !system_capabilities_finalized()) {
+		enum mitigation_state late = spectre_v4_get_cpu_fw_mitigation_state();
+
+		if (late == SPECTRE_UNAFFECTED || spectre_v4_mitigations_off())
+			late = SPECTRE_VULNERABLE;
+		state = max(state, late);
+	}
 	update_mitigation_state(&spectre_v4_state, state);
 }
 
@@ -861,6 +883,10 @@ static bool is_spectre_bhb_safe(int scope)
 	};
 	static bool all_safe = true;
 
+	if (mt6797_a72_late_boot()) {
+		all_safe = false;
+		return false;
+	}
 	if (scope != SCOPE_LOCAL_CPU)
 		return all_safe;
 
@@ -931,7 +957,8 @@ static u8 spectre_bhb_loop_affected(void)
 	else if (is_midr_in_range_list(read_cpuid_id(), spectre_bhb_k8_list))
 		k =  8;
 
-	return k;
+	/* Reserve the A72's eight-iteration loop before alternatives are patched. */
+	return mt6797_a72_late_boot() ? max_t(u8, k, 8) : k;
 }
 
 static enum mitigation_state spectre_bhb_get_cpu_fw_mitigation_state(void)

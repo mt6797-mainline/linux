@@ -272,10 +272,12 @@ config ARM_PXA2xx_CPUFREQ
 	  If in doubt, say N.
 
 config ARM_MT6797_CPUFREQ
-	tristate "MT6797 LL/L/CCI CPU frequency scaling"
+	tristate "MT6797 LL/L/B/CCI CPU frequency scaling"
 	depends on ARCH_MEDIATEK || COMPILE_TEST
 	depends on ARM64 && REGULATOR && NVMEM && THERMAL_OF
 	select MFD_SYSCON
 	help
 	  Coordinate both MT6797 Cortex-A53 clusters and CCI using the stock
 	  silicon-bin OPPs, shared DA9214 supply, SRAM LDOs and MCU FHCTL.
+	  The Cortex-A72 cluster uses its independent DA9214 rail and stock
+	  SiP PLL services with MAINPLL parking and coordinated CCI rates.

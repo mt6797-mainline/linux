@@ -5,6 +5,14 @@
 menu "MediaTek SoC drivers"
 	depends on ARCH_MEDIATEK || COMPILE_TEST
 
+config MTK_MT6797_A72
+	bool "MediaTek MT6797 Cortex-A72 power sequencing"
+	depends on ARM64 && ARM_PSCI_FW && REGULATOR && RESET_CONTROLLER && HOTPLUG_CPU
+	help
+	  Prepare the external DA9214 supply, reset latch, isolation and SRAM
+	  LDO before asking the stock firmware to start the Cortex-A72 cluster.
+	  The supply is released only after PSCI confirms the last core is off.
+
 config MT6797_CONNSYS
 	tristate "MediaTek MT6797 connectivity power and platform control"
 	depends on OF && REGULATOR_MT6351_VCN

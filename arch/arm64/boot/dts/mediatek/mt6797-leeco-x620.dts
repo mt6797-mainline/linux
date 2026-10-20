@@ -34,6 +34,10 @@
 				core2 { cpu = <&cpu6>; };
 				core3 { cpu = <&cpu7>; };
 			};
+			cluster2 {
+				core0 { cpu = <&cpu8>; };
+				core1 { cpu = <&cpu9>; };
+			};
 		};
 	};
 	memory@40000000 {
@@ -50,7 +54,7 @@
 		#address-cells = <2>;
 		#size-cells = <2>;
 		ranges;
-		bootargs = "console=tty0 earlycon=x620ram,mmio32,0x444bf000 keep_bootcon loglevel=8 ignore_loglevel printk.time=1 clk_ignore_unused pd_ignore_unused maxcpus=8 cpuidle.off=1 rdinit=/init panic=0 fbcon=nodefer";
+		bootargs = "console=tty0 earlycon=x620ram,mmio32,0x444bf000 keep_bootcon loglevel=8 ignore_loglevel printk.time=1 clk_ignore_unused pd_ignore_unused cpuidle.off=1 rdinit=/init panic=0 fbcon=nodefer";
 		framebuffer@bd0c0000 {
 			compatible = "simple-framebuffer";
 			reg = <0 0xbd0c0000 0 0x7f8000>;
@@ -108,6 +112,7 @@
 		#address-cells = <1>;
 		#size-cells = <1>;
 		speed_bin: speed-bin@58 { reg = <0x58 4>; };
+		date_code: date-code@f4 { reg = <0xf4 4>; };
 		thermal_cali: calibration@7c { reg = <0x7c 12>; };
 	};
 
@@ -138,8 +143,18 @@
 		mediatek,infracfg = <&infrasys>;
 		mediatek,topckgen = <&topckgen>;
 		vproc-supply = <&vproc1>;
-		nvmem-cells = <&speed_bin>;
-		nvmem-cell-names = "speed-bin";
+		nvmem-cells = <&speed_bin>, <&date_code>;
+		nvmem-cell-names = "speed-bin", "date-code";
+	};
+
+	a72_power: cpu-power@10222000 {
+		compatible = "mediatek,mt6797-a72-power";
+		reg = <0 0x10222000 0 0x1000>,
+		      <0 0x10006000 0 0x1000>;
+		reg-names = "mcucfg2", "spm";
+		vproc-supply = <&vproc2>;
+		resets = <&watchdog 11>;
+		reset-names = "pwrap-spi";
 	};
 
 	thermal-zones {
@@ -157,9 +172,9 @@
 			cooling-maps {
 				map-charge-warm { trip = <&soc_warm>; cooling-device = <&charger_policy 1 2>; };
 				map-charge-hot { trip = <&soc_hot>; cooling-device = <&charger_policy 3 3>; };
-				map-warm { trip = <&soc_warm>; cooling-device = <&cpu0 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>, <&cpu4 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>; };
-				map-hot { trip = <&soc_hot>; cooling-device = <&cpu0 3 THERMAL_NO_LIMIT>, <&cpu4 3 THERMAL_NO_LIMIT>; };
-				map-very-hot { trip = <&soc_very_hot>; cooling-device = <&cpu0 12 THERMAL_NO_LIMIT>, <&cpu4 12 THERMAL_NO_LIMIT>; };
+				map-warm { trip = <&soc_warm>; cooling-device = <&cpu0 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>, <&cpu4 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>, <&cpu8 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>, <&cpu9 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>; };
+				map-hot { trip = <&soc_hot>; cooling-device = <&cpu0 3 THERMAL_NO_LIMIT>, <&cpu4 3 THERMAL_NO_LIMIT>, <&cpu8 3 THERMAL_NO_LIMIT>, <&cpu9 3 THERMAL_NO_LIMIT>; };
+				map-very-hot { trip = <&soc_very_hot>; cooling-device = <&cpu0 12 THERMAL_NO_LIMIT>, <&cpu4 12 THERMAL_NO_LIMIT>, <&cpu8 12 THERMAL_NO_LIMIT>, <&cpu9 12 THERMAL_NO_LIMIT>; };
 			};
 		};
 		mt6797-big { polling-delay = <1000>; polling-delay-passive = <0>; thermal-sensors = <&thermal 0>; trips { critical { temperature = <117000>; hysteresis = <0>; type = "critical"; }; }; };
@@ -550,14 +565,14 @@
 	};
 };
 
-/* Hide A72 CPUs while debugging the CPU8 startup hang. */
-/delete-node/ &cpu8;
-/delete-node/ &cpu9;
+&watchdog { #reset-cells = <1>; };
 
 
 /* Both active A53 clusters share VPROC1 and eight SRAM LDOs. */
 &cpu0 { #cooling-cells = <2>; };
 &cpu4 { #cooling-cells = <2>; };
+&cpu8 { #cooling-cells = <2>; };
+&cpu9 { #cooling-cells = <2>; };
 
 &i2c6 {
 	compatible = "mediatek,mt6797-i2c-appm";
@@ -583,7 +598,11 @@
 				regulator-boot-on;
 				regulator-always-on;
 			};
-			BUCKB { regulator-name = "vproc2"; regulator-boot-on; regulator-always-on; };
+			vproc2: BUCKB {
+				regulator-name = "vproc2";
+				regulator-min-microvolt = <800000>;
+				regulator-max-microvolt = <1200000>;
+			};
 		};
 	};
 };

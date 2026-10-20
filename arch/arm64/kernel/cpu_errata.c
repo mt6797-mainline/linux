@@ -8,6 +8,7 @@
 #include <linux/arm-smccc.h>
 #include <linux/types.h>
 #include <linux/cpu.h>
+#include <linux/soc/mediatek/mt6797-a72.h>
 #include <asm/cpu.h>
 #include <asm/cputype.h>
 #include <asm/cpufeature.h>
@@ -38,7 +39,19 @@ is_affected_midr_range_list(const struct arm64_cpu_capabilities *entry,
 			    int scope)
 {
 	WARN_ON(scope != SCOPE_LOCAL_CPU || preemptible());
-	return is_midr_in_range_list(read_cpuid_id(), entry->midr_range_list);
+	if (is_midr_in_range_list(read_cpuid_id(), entry->midr_range_list))
+		return true;
+
+	/*
+	 * The stock MT6797 big-cluster supply is prepared by a late platform
+	 * driver. Its A72s first appear through deferred CPU hotplug,
+	 * after alternatives and the system erratum set have been finalized.
+	 * Enable the two all-revision A72 workarounds before that happens;
+	 * otherwise the late CPU is correctly rejected as incompatible.
+	 */
+	return mt6797_a72_late_boot() &&
+		(entry->capability == ARM64_WORKAROUND_SPECULATIVE_AT ||
+		 entry->capability == ARM64_WORKAROUND_1742098);
 }
 
 static bool __maybe_unused
