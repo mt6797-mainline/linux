@@ -54,7 +54,7 @@
 		#address-cells = <2>;
 		#size-cells = <2>;
 		ranges;
-		bootargs = "console=tty0 earlycon=x620ram,mmio32,0x444bf000 keep_bootcon loglevel=8 ignore_loglevel printk.time=1 clk_ignore_unused pd_ignore_unused cpuidle.off=1 rdinit=/init panic=0 fbcon=nodefer";
+		bootargs = "console=tty0 earlycon=x620ram,mmio32,0x444bf000 keep_bootcon loglevel=8 ignore_loglevel printk.time=1 clk_ignore_unused pd_ignore_unused maxcpus=1 cpuidle.off=1 rdinit=/init panic=0 fsck.mode=skip fbcon=nodefer";
 		framebuffer@bd0c0000 {
 			compatible = "simple-framebuffer";
 			reg = <0 0xbd0c0000 0 0x7f8000>;
@@ -194,6 +194,9 @@
 		mediatek,retain-bootloader-state;
 		pmic_mt6351: pmic {
 			compatible = "mediatek,mt6351";
+			poweroff {
+				compatible = "mediatek,mt6351-poweroff";
+			};
 			battery_adc: battery-adc {
 				compatible = "mediatek,mt6351-battery-adc";
 				#io-channel-cells = <1>;

@@ -175,7 +175,13 @@ def main():
           '[org/onboard/auto-show]\nenabled=true\n')
     write('etc/systemd/system/serial-getty@ttyGS0.service.d/50-x620.conf',
           '[Service]\nExecStart=\n'
-          'ExecStart=-/sbin/agetty --autologin root --noclear --keep-baud 115200,38400,9600 - vt100\n')
+          'ExecStart=-/sbin/agetty --autologin root --noclear --keep-baud 115200,38400,9600 - vt100\n'
+          'ExecStop=-/usr/sbin/mt6797-usb-console-hangup\n'
+          'TimeoutStopSec=10s\n')
+    write('usr/sbin/mt6797-usb-console-hangup',
+          Path(__file__).with_name('mt6797-usb-console-hangup.py').read_text(), 0o755)
+    write('etc/systemd/system/session-.scope.d/50-mt6797-x620.conf',
+          '[Scope]\nSendSIGHUP=yes\nTimeoutStopSec=10s\n')
     write('etc/systemd/system/x620-zram.service',
           '[Unit]\nDescription=X620 compressed RAM swap\nBefore=display-manager.service\n'
           'ConditionPathExists=/sys/block/zram0/disksize\n'

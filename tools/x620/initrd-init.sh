@@ -25,6 +25,14 @@ if test -f /sys/firmware/fdt; then
     cat /sys/firmware/fdt > /run/boot.dtb
     dtc -I dtb -O dts /run/boot.dtb > /run/boot.dts 2>/run/dtc.log || true
 fi
+# Boot on the LK entry CPU (CPU0); add the two A72s once their supplies are ready.
+# maxcpus=1 keeps CPU1-7 offline during kernel initialization, without hiding them.
+for cpu in 8 9; do
+    if ! echo 1 > "/sys/devices/system/cpu/cpu$cpu/online"; then
+        printf '<3>MT6797: CPU%s startup failed; retaining available CPUs\n' "$cpu" > /dev/kmsg
+    fi
+done
+printf '<6>MT6797: boot CPUs online=%s\n' "$(cat /sys/devices/system/cpu/online)" > /dev/kmsg
 . /usr/bin/x620-rootfs
 mkdir -p /run/diag
 cat /proc/meminfo > /run/diag/meminfo

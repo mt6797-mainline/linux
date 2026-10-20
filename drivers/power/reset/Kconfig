@@ -177,6 +177,13 @@ config POWER_RESET_LTC2952
 	  This driver supports an external powerdown trigger and board power
 	  down via the LTC2952. Bindings are made in the device tree.
 
+config POWER_RESET_MT6351
+	bool "MediaTek MT6351 RTC power-off"
+	depends on OF && MTK_PMIC_WRAP
+	select REGMAP
+	help
+	  Cut system power through the MT6351 RTC/BBPU on MT6797 systems.
+
 config POWER_RESET_MT6323
 	bool "MediaTek MT6323 power-off driver"
 	depends on MFD_MT6397

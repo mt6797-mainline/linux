@@ -1444,14 +1444,27 @@ static bool pwrap_is_fsm_idle_and_sync_idle(struct pmic_wrapper *wrp)
 		(val & PWRAP_STATE_SYNC_IDLE0);
 }
 
+static int pwrap_wait_for_state(struct pmic_wrapper *wrp,
+			       bool (*ready)(struct pmic_wrapper *))
+{
+	bool done;
+
+	/* MT6797 also uses WACS2 to cut PMIC power after interrupts are off. */
+	if (wrp->master->type == PWRAP_MT6797)
+		return read_poll_timeout_atomic(ready, done, done,
+				PWRAP_POLL_DELAY_US, PWRAP_POLL_TIMEOUT_US,
+				false, wrp);
+
+	return readx_poll_timeout(ready, wrp, done, done,
+				 PWRAP_POLL_DELAY_US, PWRAP_POLL_TIMEOUT_US);
+}
+
 static int pwrap_read16(struct pmic_wrapper *wrp, u32 adr, u32 *rdata)
 {
-	bool tmp;
 	int ret;
 	u32 val;
 
-	ret = readx_poll_timeout(pwrap_is_fsm_idle, wrp, tmp, tmp,
-				 PWRAP_POLL_DELAY_US, PWRAP_POLL_TIMEOUT_US);
+	ret = pwrap_wait_for_state(wrp, pwrap_is_fsm_idle);
 	if (ret) {
 		pwrap_leave_fsm_vldclr(wrp);
 		return ret;
@@ -1463,8 +1476,7 @@ static int pwrap_read16(struct pmic_wrapper *wrp, u32 adr, u32 *rdata)
 		val = (adr >> 1) << 16;
 	pwrap_writel(wrp, val, PWRAP_WACS2_CMD);
 
-	ret = readx_poll_timeout(pwrap_is_fsm_vldclr, wrp, tmp, tmp,
-				 PWRAP_POLL_DELAY_US, PWRAP_POLL_TIMEOUT_US);
+	ret = pwrap_wait_for_state(wrp, pwrap_is_fsm_vldclr);
 	if (ret)
 		return ret;
 
@@ -1518,11 +1530,9 @@ static int pwrap_read(struct pmic_wrapper *wrp, u32 adr, u32 *rdata)
 
 static int pwrap_write16(struct pmic_wrapper *wrp, u32 adr, u32 wdata)
 {
-	bool tmp;
 	int ret;
 
-	ret = readx_poll_timeout(pwrap_is_fsm_idle, wrp, tmp, tmp,
-				 PWRAP_POLL_DELAY_US, PWRAP_POLL_TIMEOUT_US);
+	ret = pwrap_wait_for_state(wrp, pwrap_is_fsm_idle);
 	if (ret) {
 		pwrap_leave_fsm_vldclr(wrp);
 		return ret;
@@ -2174,6 +2184,16 @@ static const struct regmap_config pwrap_regmap_config32 = {
 	.max_register = 0xffff,
 };
 
+static const struct regmap_config pwrap_mt6797_regmap_config = {
+	.reg_bits = 16,
+	.val_bits = 16,
+	.reg_stride = 2,
+	.reg_read = pwrap_regmap_read,
+	.reg_write = pwrap_regmap_write,
+	.max_register = 0xffff,
+	.fast_io = true,
+};
+
 static const struct pwrap_slv_regops pwrap_regops16 = {
 	.pwrap_read = pwrap_read16,
 	.pwrap_write = pwrap_write16,
@@ -2603,7 +2623,9 @@ static int pwrap_probe(struct platform_device *pdev)
 		return ret;
 
 create_regmap:
-	wrp->regmap = devm_regmap_init(wrp->dev, NULL, wrp, wrp->slave->regops->regmap);
+	wrp->regmap = devm_regmap_init(wrp->dev, NULL, wrp,
+		wrp->master->type == PWRAP_MT6797 ?
+		&pwrap_mt6797_regmap_config : wrp->slave->regops->regmap);
 	if (IS_ERR(wrp->regmap))
 		return PTR_ERR(wrp->regmap);
 

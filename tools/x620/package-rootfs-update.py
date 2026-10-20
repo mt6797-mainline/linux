@@ -60,6 +60,7 @@ def main():
     selected = [
         'usr/sbin/mt6797-wmt', 'usr/sbin/mt6797-wifi',
         'usr/sbin/x620-usb-gadget', 'usr/sbin/x620-zram',
+        'usr/sbin/mt6797-usb-console-hangup',
         'usr/share/mt6797-x620/rootfs-packages.txt',
         'etc/systemd/system/mt6797-wifi.service',
         'etc/systemd/system/x620-usb-gadget.service',
@@ -67,6 +68,7 @@ def main():
         'etc/systemd/system/mt6797-x620-ssh-hostkeys.service',
         'etc/systemd/system/ssh.service.d/50-mt6797-x620.conf',
         'etc/systemd/system/serial-getty@ttyGS0.service.d/50-x620.conf',
+        'etc/systemd/system/session-.scope.d/50-mt6797-x620.conf',
         'etc/NetworkManager/conf.d/20-mt6797-x620-wifi.conf',
     ]
     selected.extend('usr/lib/firmware/mediatek/mt6797/' + name for name in
@@ -110,7 +112,7 @@ cmp -s /sys/kernel/notes /usr/lib/mt6797-x620/kernel.notes || {
     write('DEBIAN/control',
           f'Package: mt6797-x620-platform\nVersion: {version}\nArchitecture: arm64\n'
           'Maintainer: dysorder <dysorder@users.noreply.github.com>\n'
-          f'Installed-Size: {size}\nDepends: kmod, systemd, network-manager, wpasupplicant, wireless-regdb, iw\n'
+          f'Installed-Size: {size}\nDepends: kmod, systemd, network-manager, wpasupplicant, wireless-regdb, iw, python3-minimal\n'
           'Description: MT6797 X620 kernel modules, firmware and native system services\n')
     write('DEBIAN/preinst', f'''#!/bin/sh
 set -eu

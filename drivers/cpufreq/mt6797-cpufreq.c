@@ -600,13 +600,13 @@ static int mt6797_policy_init(struct cpufreq_policy *policy)
 	return 0;
 }
 
-static void mt6797_policy_exit(struct cpufreq_policy *policy)
+static int mt6797_policy_offline(struct cpufreq_policy *policy)
 {
 	struct mt6797_dvfs *d = policy->driver_data;
 	int uv, ret;
 
 	if (mt6797_cluster(policy->cpu) != 3)
-		return;
+		return 0;
 	mutex_lock(&d->lock);
 	if (d->fault)
 		goto out;
@@ -622,6 +622,7 @@ static void mt6797_policy_exit(struct cpufreq_policy *policy)
 	}
 out:
 	mutex_unlock(&d->lock);
+	return 0;
 }
 static struct cpufreq_driver mt6797_cpufreq_driver = {
 	.name = "mt6797",
@@ -630,7 +631,9 @@ static struct cpufreq_driver mt6797_cpufreq_driver = {
 	.target_index = mt6797_target,
 	.get = mt6797_get,
 	.init = mt6797_policy_init,
-	.exit = mt6797_policy_exit,
+	/* Tables belong to the device, and cooling still uses them while offline. */
+	.online = mt6797_policy_init,
+	.offline = mt6797_policy_offline,
 	.attr = cpufreq_generic_attr,
 };
 

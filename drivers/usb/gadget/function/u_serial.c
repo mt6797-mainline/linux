@@ -819,6 +819,20 @@ static unsigned int gs_chars_in_buffer(struct tty_struct *tty)
 	return chars;
 }
 
+static void gs_flush_buffer(struct tty_struct *tty)
+{
+	struct gs_port *port = tty->driver_data;
+	unsigned long flags;
+
+	/* A disconnected or unread host must not hold up tty hangup or tcflush. */
+	spin_lock_irqsave(&port->port_lock, flags);
+	kfifo_reset(&port->port_write_buf);
+	spin_unlock_irqrestore(&port->port_lock, flags);
+
+	wake_up_interruptible(&port->drain_wait);
+	tty_wakeup(tty);
+}
+
 /* undo side effects of setting TTY_THROTTLED */
 static void gs_unthrottle(struct tty_struct *tty)
 {
@@ -880,6 +894,7 @@ static const struct tty_operations gs_tty_ops = {
 	.flush_chars =		gs_flush_chars,
 	.write_room =		gs_write_room,
 	.chars_in_buffer =	gs_chars_in_buffer,
+	.flush_buffer =		gs_flush_buffer,
 	.unthrottle =		gs_unthrottle,
 	.break_ctl =		gs_break_ctl,
 	.get_icount =		gs_get_icount,

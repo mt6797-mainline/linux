@@ -24,9 +24,14 @@ x620_rootfs_boot()
     mkdir -p /newroot
     fs_bytes=$(blkid -p -s FSSIZE -o value "$root_device" 2>/dev/null) || fs_bytes=
     device_bytes=$(blockdev --getsize64 "$root_device" 2>/dev/null) || device_bytes=
+    # GPT partitions can end on a 512-byte sector rather than an F2FS 4KiB block.
+    # Ignore the unusable tail so an already expanded filesystem is mounted directly.
+    if test -n "$device_bytes"; then
+        device_bytes=$((device_bytes / 4096 * 4096))
+    fi
     if test -n "$fs_bytes" && test -n "$device_bytes" && test "$device_bytes" -gt "$fs_bytes"; then
         echo "X620: growing F2FS to $device_bytes bytes" > /dev/console
-        if ! fsck.f2fs -f "$root_device" || ! resize.f2fs "$root_device"; then
+        if ! resize.f2fs "$root_device"; then
             echo 'X620: F2FS growth failed; starting diagnostic initrd' > /dev/console
             return 0
         fi
