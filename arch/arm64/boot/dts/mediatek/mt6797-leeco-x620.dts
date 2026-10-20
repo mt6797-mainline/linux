@@ -14,6 +14,7 @@
 		i2c5 = &i2c5;
 		i2c4 = &i2c4;
 		i2c6 = &i2c6;
+		i2c7 = &i2c7;
 		ovl0 = &disp_ovl0;
 		ovl-2l0 = &disp_ovl0_2l;
 		rdma0 = &disp_rdma0;
@@ -157,6 +158,50 @@
 		reset-names = "pwrap-spi";
 	};
 
+	mfg: power-controller@13000000 {
+		compatible = "mediatek,mt6797-mfg";
+		reg = <0 0x13000000 0 0x1000>;
+		mediatek,spm = <&scpsys>;
+		mediatek,infracfg = <&infrasys>;
+		mediatek,topckgen = <&topckgen>;
+		mediatek,apmixedsys = <&apmixedsys>;
+		mali-supply = <&vgpu>;
+		operating-points-v2 = <&gpu_opps>;
+		resets = <&watchdog 2>;
+		#clock-cells = <0>;
+		#power-domain-cells = <0>;
+	};
+
+	gpu: gpu@13040000 {
+		compatible = "mediatek,mt6797-mali", "arm,mali-t880";
+		reg = <0 0x13040000 0 0x4000>;
+		interrupts = <GIC_SPI 264 IRQ_TYPE_LEVEL_LOW>,
+			     <GIC_SPI 263 IRQ_TYPE_LEVEL_LOW>,
+			     <GIC_SPI 262 IRQ_TYPE_LEVEL_LOW>;
+		interrupt-names = "job", "mmu", "gpu";
+		clocks = <&mfg>;
+		clock-names = "core";
+		power-domains = <&mfg>;
+		/* MFG owns voltage changes, including the 416 MHz divider-change bridge. */
+		operating-points-v2 = <&gpu_opps>;
+		#cooling-cells = <2>;
+		/* Factory dynamic-power reference: 1169 mW at 800 MHz / 1 V. */
+		dynamic-power-coefficient = <1461>;
+	};
+
+	gpu_opps: opp-table-gpu {
+		compatible = "operating-points-v2";
+		/* Factory FY table, rounded to its FAN53555 VSEL0 selectors. */
+		opp-154500000 { opp-hz = /bits/ 64 <154500000>; opp-microvolt = <808216>; };
+		opp-238000000 { opp-hz = /bits/ 64 <238000000>; opp-microvolt = <859520>; };
+		opp-301500000 { opp-hz = /bits/ 64 <301500000>; opp-microvolt = <897998>; };
+		opp-365000000 { opp-hz = /bits/ 64 <365000000>; opp-microvolt = <910824>; };
+		opp-442500000 { opp-hz = /bits/ 64 <442500000>; opp-microvolt = <974954>; };
+		opp-520000000 { opp-hz = /bits/ 64 <520000000>; opp-microvolt = <1000606>; };
+		opp-610000000 { opp-hz = /bits/ 64 <610000000>; opp-microvolt = <1077562>; };
+		opp-700000000 { opp-hz = /bits/ 64 <700000000>; opp-microvolt = <1128866>; };
+	};
+
 	thermal-zones {
 		/* Stock TZCPU thresholds; cooling states use mainline cpufreq. */
 		mt6797-soc {
@@ -172,13 +217,28 @@
 			cooling-maps {
 				map-charge-warm { trip = <&soc_warm>; cooling-device = <&charger_policy 1 2>; };
 				map-charge-hot { trip = <&soc_hot>; cooling-device = <&charger_policy 3 3>; };
-				map-warm { trip = <&soc_warm>; cooling-device = <&cpu0 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>, <&cpu4 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>, <&cpu8 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>, <&cpu9 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>; };
-				map-hot { trip = <&soc_hot>; cooling-device = <&cpu0 3 THERMAL_NO_LIMIT>, <&cpu4 3 THERMAL_NO_LIMIT>, <&cpu8 3 THERMAL_NO_LIMIT>, <&cpu9 3 THERMAL_NO_LIMIT>; };
-				map-very-hot { trip = <&soc_very_hot>; cooling-device = <&cpu0 12 THERMAL_NO_LIMIT>, <&cpu4 12 THERMAL_NO_LIMIT>, <&cpu8 12 THERMAL_NO_LIMIT>, <&cpu9 12 THERMAL_NO_LIMIT>; };
+				map-warm { trip = <&soc_warm>; cooling-device = <&cpu0 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>, <&cpu4 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>, <&cpu8 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>, <&cpu9 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>, <&gpu THERMAL_NO_LIMIT THERMAL_NO_LIMIT>; };
+				map-hot { trip = <&soc_hot>; cooling-device = <&cpu0 3 THERMAL_NO_LIMIT>, <&cpu4 3 THERMAL_NO_LIMIT>, <&cpu8 3 THERMAL_NO_LIMIT>, <&cpu9 3 THERMAL_NO_LIMIT>, <&gpu 3 THERMAL_NO_LIMIT>; };
+				map-very-hot { trip = <&soc_very_hot>; cooling-device = <&cpu0 12 THERMAL_NO_LIMIT>, <&cpu4 12 THERMAL_NO_LIMIT>, <&cpu8 12 THERMAL_NO_LIMIT>, <&cpu9 12 THERMAL_NO_LIMIT>, <&gpu 6 THERMAL_NO_LIMIT>; };
 			};
 		};
 		mt6797-big { polling-delay = <1000>; polling-delay-passive = <0>; thermal-sensors = <&thermal 0>; trips { critical { temperature = <117000>; hysteresis = <0>; type = "critical"; }; }; };
-		mt6797-gpu { polling-delay = <1000>; polling-delay-passive = <0>; thermal-sensors = <&thermal 1>; trips { critical { temperature = <117000>; hysteresis = <0>; type = "critical"; }; }; };
+		mt6797-gpu {
+			polling-delay = <250>;
+			polling-delay-passive = <40>;
+			thermal-sensors = <&thermal 1>;
+			trips {
+				gpu_warm: warm { temperature = <65000>; hysteresis = <2000>; type = "passive"; };
+				gpu_hot: hot { temperature = <85000>; hysteresis = <2000>; type = "passive"; };
+				gpu_very_hot: very-hot { temperature = <95000>; hysteresis = <2000>; type = "passive"; };
+				critical { temperature = <117000>; hysteresis = <0>; type = "critical"; };
+			};
+			cooling-maps {
+				map-warm { trip = <&gpu_warm>; cooling-device = <&gpu THERMAL_NO_LIMIT THERMAL_NO_LIMIT>; };
+				map-hot { trip = <&gpu_hot>; cooling-device = <&gpu 3 THERMAL_NO_LIMIT>; };
+				map-very-hot { trip = <&gpu_very_hot>; cooling-device = <&gpu 6 THERMAL_NO_LIMIT>; };
+			};
+		};
 		mt6797-sensors { polling-delay = <1000>; polling-delay-passive = <0>; thermal-sensors = <&thermal 2>; trips { critical { temperature = <117000>; hysteresis = <0>; type = "critical"; }; }; };
 		mt6797-cpu-l { polling-delay = <1000>; polling-delay-passive = <0>; thermal-sensors = <&thermal 3>; trips { critical { temperature = <117000>; hysteresis = <0>; type = "critical"; }; }; };
 		mt6797-cpu-ll { polling-delay = <1000>; polling-delay-passive = <0>; thermal-sensors = <&thermal 4>; trips { critical { temperature = <117000>; hysteresis = <0>; type = "critical"; }; }; };
@@ -493,7 +553,12 @@
 &imgsys { status = "disabled"; };
 &vdecsys { status = "disabled"; };
 &vencsys { status = "disabled"; };
-&scpsys { status = "disabled"; };
+&scpsys {
+	compatible = "mediatek,mt6797-scpsys", "syscon";
+	/delete-property/ clocks;
+	/delete-property/ clock-names;
+	status = "disabled";
+};
 &pio {
 	reg = <0 0x10005000 0 0x1000>,
 	      <0 0x10002000 0 0x400>,
@@ -696,5 +761,26 @@
 		cellwise,monitor-interval-ms = <5000>;
 		io-channels = <&battery_adc 0>, <&battery_adc 2>;
 		io-channel-names = "current", "temperature";
+	};
+};
+
+&i2c7 {
+	clocks = <&infra_clocks CLK_INFRA_I2C_GPUPM>,
+		 <&infra_clocks CLK_INFRA_AP_DMA>;
+	clock-names = "main", "dma";
+	clock-frequency = <400000>;
+	clock-div = <10>;
+	pinctrl-names = "default";
+	pinctrl-0 = <&i2c7_pins_a>;
+	status = "okay";
+
+	vgpu: regulator@60 {
+		compatible = "mediatek,mt6797-vgpu-buck", "fcs,fan53555";
+		reg = <0x60>;
+		regulator-name = "vgpu";
+		regulator-min-microvolt = <603000>;
+		regulator-max-microvolt = <1128900>;
+		regulator-ramp-delay = <32000>;
+		fcs,suspend-voltage-selector = <1>;
 	};
 };

@@ -738,6 +738,11 @@ static const struct panfrost_compatible default_data = {
 	.pm_domain_names = NULL,
 };
 
+/* MFG owns VGPU: changing PLL postdiv requires a transient voltage/clock OPP. */
+static const struct panfrost_compatible mediatek_mt6797_data = {
+	.num_pm_domains = 1,
+};
+
 static const struct panfrost_compatible amlogic_data = {
 	.num_supplies = ARRAY_SIZE(default_supplies) - 1,
 	.supply_names = default_supplies,
@@ -816,6 +821,7 @@ static const struct of_device_id dt_match[] = {
 	{ .compatible = "arm,mali-t880", .data = &default_data, },
 	{ .compatible = "arm,mali-bifrost", .data = &default_data, },
 	{ .compatible = "arm,mali-valhall-jm", .data = &default_data, },
+	{ .compatible = "mediatek,mt6797-mali", .data = &mediatek_mt6797_data },
 	{ .compatible = "mediatek,mt8183-mali", .data = &mediatek_mt8183_data },
 	{ .compatible = "mediatek,mt8183b-mali", .data = &mediatek_mt8183_b_data },
 	{ .compatible = "mediatek,mt8186-mali", .data = &mediatek_mt8186_data },

@@ -103,10 +103,11 @@ def main():
           '[connection-mt6797-x620]\nmatch-device=interface-name:wlan0\n'
           'wifi.cloned-mac-address=preserve\n')
 
-    for group in ('sudo', 'audio', 'video', 'input', 'netdev'):
+    for group in ('sudo', 'audio', 'video', 'render', 'input', 'netdev'):
         target('/usr/sbin/groupadd', '-f', group)
     if subprocess.run(['chroot', str(root), '/usr/bin/id', 'dysorder'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode:
-        target('/usr/sbin/useradd', '-m', '-s', '/bin/bash', '-G', 'sudo,audio,video,input,netdev', 'dysorder')
+        target('/usr/sbin/useradd', '-m', '-s', '/bin/bash', '-G', 'sudo,audio,video,render,input,netdev', 'dysorder')
+    target('/usr/sbin/usermod', '-aG', 'render', 'dysorder')
     install_user_ssh_key(root, workspace / 'cfg/mt6797-x620-ssh.pub')
     install_user_password(root, workspace / 'cfg/mt6797-x620-password.hash')
 
@@ -132,8 +133,9 @@ def main():
           'user-session=mate\ngreeter-session=lightdm-gtk-greeter\n'
           'xserver-command=X -dpi 192 -s 0 -dpms\n')
     write('etc/X11/xorg.conf.d/20-x620-kms.conf',
-          'Section "Device"\n    Identifier "X620 native DRM"\n'
-          '    Driver "modesetting"\n    Option "AccelMethod" "none"\n'
+          'Section "OutputClass"\n    Identifier "MT6797 display"\n'
+          '    MatchDriver "mediatek"\n    Driver "modesetting"\n'
+          '    Option "PrimaryGPU" "true"\n'
           '    Option "SWcursor" "true"\nEndSection\n')
     write('etc/dconf/profile/user', 'user-db:user\nsystem-db:local\n')
     write('etc/dconf/db/local.d/00-x620',

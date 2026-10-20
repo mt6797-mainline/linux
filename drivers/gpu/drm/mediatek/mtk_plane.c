@@ -324,6 +324,7 @@ int mtk_plane_init(struct drm_device *dev, struct drm_plane *plane,
 		DRM_ERROR("failed to initialize plane\n");
 		return err;
 	}
+	drm_plane_enable_fb_damage_clips(plane);
 
 	/*
 	 * The hardware does not support repositioning planes by muxing: their

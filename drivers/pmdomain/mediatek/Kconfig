@@ -3,6 +3,16 @@
 menu "MediaTek PM Domains"
 	depends on ARCH_MEDIATEK || COMPILE_TEST
 
+config MT6797_MFG
+	bool "MediaTek MT6797 GPU power and clock control"
+	depends on OF && COMMON_CLK && REGULATOR && RESET_CONTROLLER && PM
+	select MFD_SYSCON
+	select PM_GENERIC_DOMAINS
+	select PM_OPP
+	help
+	  Control the MT6797 MFG supply, internal LDOs, clock, bus protection
+	  and six power islands using the factory power sequence.
+
 config MTK_SCPSYS
 	bool "MediaTek SCPSYS Support"
 	default ARCH_MEDIATEK

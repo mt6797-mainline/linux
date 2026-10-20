@@ -54,6 +54,7 @@ struct mtk_crtc {
 	bool				pending_async_planes;
 	struct mtk_ddp_comp		*command_output;
 	struct work_struct		command_work;
+	bool				command_dirty;
 	bool				command_vblank_enabled;
 
 #if IS_REACHABLE(CONFIG_MTK_CMDQ)
@@ -592,6 +593,8 @@ static void mtk_crtc_command_work(struct work_struct *work)
 	/* Never reprogram planes while the previous command frame is reading them. */
 	if (!READ_ONCE(crtc->enabled) || !mtk_dsi_cmd_ready(crtc->command_output->dev))
 		goto out;
+	if (!READ_ONCE(crtc->command_dirty))
+		goto out;
 	spin_lock_irqsave(&crtc->config_lock, flags);
 	if (crtc->command_event) {
 		spin_unlock_irqrestore(&crtc->config_lock, flags);
@@ -611,7 +614,8 @@ static void mtk_crtc_command_work(struct work_struct *work)
 	}
 	crtc->config_updating = false;
 	spin_unlock_irqrestore(&crtc->config_lock, flags);
-	/* TE paces transfers; DSI's FRAME_DONE IRQ produces a vblank. */
+	WRITE_ONCE(crtc->command_dirty, false);
+	/* TE paces transfers; FRAME_DONE retires the submitted buffer/event. */
 	wmb();
 	mtk_mutex_enable(crtc->mutex);
 	mtk_dsi_cmd_frame(crtc->command_output->dev);
@@ -624,6 +628,10 @@ static void mtk_crtc_command_te(void *data)
 	struct mtk_crtc *crtc = to_mtk_crtc(data);
 
 	if (!READ_ONCE(crtc->enabled))
+		return;
+	if (READ_ONCE(crtc->command_vblank_enabled))
+		drm_crtc_handle_vblank(&crtc->base);
+	if (!READ_ONCE(crtc->command_dirty))
 		return;
 	queue_work(system_highpri_wq, &crtc->command_work);
 }
@@ -668,6 +676,7 @@ static void mtk_crtc_update_config(struct mtk_crtc *mtk_crtc, bool needs_vblank)
 	if (pending_async_planes)
 		mtk_crtc->pending_async_planes = true;
 	if (mtk_crtc->command_output) {
+		WRITE_ONCE(mtk_crtc->command_dirty, true);
 		spin_lock_irqsave(&mtk_crtc->config_lock, flags);
 		mtk_crtc->config_updating = false;
 		spin_unlock_irqrestore(&mtk_crtc->config_lock, flags);
@@ -730,8 +739,6 @@ static void mtk_crtc_ddp_irq(void *data)
 	struct mtk_drm_private *priv = crtc->dev->dev_private;
 
 	if (mtk_crtc->command_output) {
-		if (READ_ONCE(mtk_crtc->command_vblank_enabled))
-			drm_crtc_handle_vblank(crtc);
 		mtk_crtc_finish_command_event(mtk_crtc);
 		return;
 	}

@@ -138,13 +138,15 @@ int panfrost_devfreq_init(struct panfrost_device *pfdev)
 	if (ret)
 		return ret;
 
-	ret = devm_pm_opp_set_regulators(dev, pfdev->comp->supply_names);
-	if (ret) {
-		/* Continue if the optional regulator is missing */
-		if (ret != -ENODEV) {
-			if (ret != -EPROBE_DEFER)
-				DRM_DEV_ERROR(dev, "Couldn't set OPP regulators\n");
-			return ret;
+	if (pfdev->comp->num_supplies) {
+		ret = devm_pm_opp_set_regulators(dev, pfdev->comp->supply_names);
+		if (ret) {
+			/* Continue if the optional regulator is missing */
+			if (ret != -ENODEV) {
+				if (ret != -EPROBE_DEFER)
+					DRM_DEV_ERROR(dev, "Couldn't set OPP regulators\n");
+				return ret;
+			}
 		}
 	}
 

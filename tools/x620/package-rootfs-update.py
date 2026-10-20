@@ -58,6 +58,7 @@ def main():
         dest.chmod(mode)
 
     selected = [
+        'etc/X11/xorg.conf.d/20-x620-kms.conf',
         'usr/sbin/mt6797-wmt', 'usr/sbin/mt6797-wifi',
         'usr/sbin/x620-usb-gadget', 'usr/sbin/x620-zram',
         'usr/sbin/mt6797-usb-console-hangup',
@@ -124,6 +125,10 @@ fi
     write('DEBIAN/postinst', f'''#!/bin/sh
 set -eu
 test "$1" = configure || exit 0
+groupadd -f render
+if id dysorder >/dev/null 2>&1; then
+    usermod -aG render dysorder
+fi
 depmod -a '{release}'
 update-alternatives --set regulatory.db /lib/firmware/regulatory.db-upstream
 systemctl --no-reload enable wpa_supplicant.service mt6797-wifi.service x620-usb-gadget.service

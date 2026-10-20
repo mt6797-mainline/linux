@@ -295,6 +295,15 @@ static int fan53555_voltages_setup_fairchild(struct fan53555_device_info *di)
 	switch (di->chip_id) {
 	case FAN53555_CHIP_ID_00:
 		switch (di->chip_rev) {
+		case 0x1:
+			/* MT6797 factory VGPU buck: ID1=0x80, ID2=0x01. */
+			if (!of_device_is_compatible(di->dev->of_node,
+						     "mediatek,mt6797-vgpu-buck"))
+				return -EINVAL;
+			di->vsel_min = 603000;
+			di->vsel_step = 12826;
+			di->enable_time = 400;
+			break;
 		case FAN53555_CHIP_REV_00:
 			di->vsel_min = 600000;
 			di->vsel_step = 10000;

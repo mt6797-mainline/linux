@@ -51,10 +51,13 @@ mtk_drm_mode_fb_create(struct drm_device *dev,
 		       const struct drm_mode_fb_cmd2 *cmd)
 {
 	const struct drm_format_info *info = drm_get_format_info(dev, cmd);
+	struct mtk_drm_private *priv = dev->dev_private;
 
 	if (info->num_planes != 1)
 		return ERR_PTR(-EINVAL);
 
+	if (priv->data->command_mode)
+		return drm_gem_fb_create_with_dirty(dev, file, cmd);
 	return drm_gem_fb_create(dev, file, cmd);
 }
 
