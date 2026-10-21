@@ -112,7 +112,10 @@ static int x620_panel_enable(struct drm_panel *panel)
 	ret = mipi_dsi_dcs_set_column_address(p->dsi, 0, 1079);
 	if (ret < 0)
 		return ret;
-	return mipi_dsi_dcs_set_page_address(p->dsi, 0, 1919);
+	ret = mipi_dsi_dcs_set_page_address(p->dsi, 0, 1919);
+	if (ret < 0)
+		return ret;
+	return mipi_dsi_dcs_set_display_on(p->dsi);
 }
 
 static int x620_panel_disable(struct drm_panel *panel)
@@ -128,7 +131,6 @@ static int x620_panel_disable(struct drm_panel *panel)
 static int x620_panel_unprepare(struct drm_panel *panel)
 {
 	struct x620_panel *p = to_x620_panel(panel);
-	const u8 standby[] = { 0xb1, 0x01 };
 	int ret;
 
 	if (!p->prepared)
@@ -137,10 +139,11 @@ static int x620_panel_unprepare(struct drm_panel *panel)
 	if (ret < 0)
 		return ret;
 	msleep(120);
-	ret = mipi_dsi_generic_write(p->dsi, standby, sizeof(standby));
-	msleep(20);
+	/* The stock R69006 suspend path uses DCS sleep, not generic B1.
+	 * Keep the firmware-owned bias rails while the panel sleeps.
+	 */
 	p->prepared = false;
-	return ret < 0 ? ret : 0;
+	return 0;
 }
 
 static const struct drm_display_mode x620_mode = {
@@ -196,6 +199,9 @@ static int x620_panel_probe(struct mipi_dsi_device *dsi)
 	dsi->mode_flags = MIPI_DSI_MODE_LPM | MIPI_DSI_CLOCK_NON_CONTINUOUS;
 	dsi->hs_rate = 920000000; /* LK PLL_CLOCK = 460 MHz, doubled lane bit rate. */
 	drm_panel_init(&p->panel, &dsi->dev, &x620_panel_funcs, DRM_MODE_CONNECTOR_DSI);
+	ret = drm_panel_of_backlight(&p->panel);
+	if (ret)
+		return ret;
 	drm_panel_add(&p->panel);
 	mipi_dsi_set_drvdata(dsi, p);
 	ret = mipi_dsi_attach(dsi);

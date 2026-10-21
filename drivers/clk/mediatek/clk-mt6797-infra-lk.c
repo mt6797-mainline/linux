@@ -24,6 +24,9 @@ static const struct mtk_gate_regs mt6797_infra2_regs = {
 };
 
 static const struct mtk_gate mt6797_infra_lk_gates[] = {
+	GATE_MTK_FLAGS(CLK_INFRA_DISP_PWM, "mt6797-infra-disp-pwm", "mt6797-lk-pwm",
+		       &mt6797_infra1_regs, 17, &mtk_clk_gate_ops_setclr,
+		       CLK_IGNORE_UNUSED),
 	GATE_MTK_FLAGS(CLK_INFRA_I2C_GPUPM, "mt6797-infra-i2c-gpupm", "mt6797-lk-axi",
 		       &mt6797_infra2_regs, 2, &mtk_clk_gate_ops_setclr,
 		       CLK_IGNORE_UNUSED),

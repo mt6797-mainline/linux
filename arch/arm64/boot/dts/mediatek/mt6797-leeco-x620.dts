@@ -421,10 +421,27 @@
 
 	display_clock: display-clock {
 		compatible = "leeco,x620-display-clock";
-		#clock-cells = <0>;
+		#clock-cells = <1>;
 		mediatek,topckgen = <&topckgen>;
 		mediatek,apmixedsys = <&apmixedsys>;
 	};
+	disp_pwm: pwm@1100f000 {
+		compatible = "mediatek,mt6797-disp-pwm";
+		reg = <0 0x1100f000 0 0x1000>;
+		#pwm-cells = <2>;
+		clocks = <&display_clock 1>, <&infra_clocks CLK_INFRA_DISP_PWM>;
+		clock-names = "main", "mm";
+	};
+
+	backlight: backlight {
+		compatible = "pwm-backlight";
+		/* Stock: 26 MHz, divider 0, 1024 ticks per period (~25.39 kHz). */
+		pwms = <&disp_pwm 0 39385>;
+		brightness-levels = <0 1023>;
+		num-interpolated-steps = <1023>;
+		default-brightness-level = <512>;
+	};
+
 	display_larb0: syscon@14020000 {
 		compatible = "mediatek,mt6797-smi-larb", "syscon";
 		reg = <0 0x14020000 0 0x1000>;
@@ -524,6 +541,7 @@
 		};
 		panel@0 {
 			compatible = "leeco,x620-378c81";
+			backlight = <&backlight>;
 			reg = <0>;
 			mediatek,mmsys = <&mmsys>;
 			port {
@@ -545,7 +563,7 @@
 };
 &mmsys {
 	status = "okay";
-	clocks = <&display_clock>;
+	clocks = <&display_clock 0>;
 	clock-names = "mm";
 	mediatek,larb0 = <&display_larb0>;
 	mediatek,larb5 = <&display_larb5>;

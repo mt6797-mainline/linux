@@ -13,6 +13,7 @@ static int mt6797_display_clock_probe(struct platform_device *pdev)
 	struct device *dev = &pdev->dev;
 	struct regmap *top, *apmixed;
 	struct clk_hw *hw;
+	struct clk_hw_onecell_data *data;
 	u32 mux, con0, pcw, pll, divisor = 1;
 	u64 rate = 26000000;
 	int ret;
@@ -48,7 +49,29 @@ static int mt6797_display_clock_probe(struct platform_device *pdev)
 	hw = devm_clk_hw_register_fixed_rate(dev, "mm_sel", NULL, 0, rate);
 	if (IS_ERR(hw))
 		return PTR_ERR(hw);
-	ret = devm_of_clk_add_hw_provider(dev, of_clk_hw_simple_get, hw);
+	data = devm_kzalloc(dev, struct_size(data, hws, 2), GFP_KERNEL);
+	if (!data)
+		return -ENOMEM;
+	data->num = 2;
+	data->hws[0] = hw;
+
+	/*
+	 * The stock X620 LK leaves DISP_PWM on the 26 MHz parent. Keep
+	 * its mux and oscillator untouched, and reject an unknown source.
+	 */
+	ret = regmap_read(top, 0x50, &pcw);
+	if (ret)
+		return ret;
+	if (pcw & 7) {
+		dev_warn(dev, "unsupported retained PWM source %u\n", pcw & 7);
+		data->hws[1] = ERR_PTR(-EINVAL);
+	} else {
+		data->hws[1] = devm_clk_hw_register_fixed_factor(dev, "mt6797-lk-pwm",
+							      "clk26m", 0, 1, 1);
+		if (IS_ERR(data->hws[1]))
+			return PTR_ERR(data->hws[1]);
+	}
+	ret = devm_of_clk_add_hw_provider(dev, of_clk_hw_onecell_get, data);
 	if (!ret)
 		dev_info(dev, "retained MM parent %u: %llu Hz; no mux/PLL writes\n", mux, rate);
 	return ret;

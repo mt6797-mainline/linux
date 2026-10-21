@@ -998,6 +998,7 @@ config DRM_PANEL_XINPENG_XPP055C272
 config DRM_PANEL_LEECO_X620
 	tristate "LeEco X620 378C81 command-mode panel"
 	depends on OF && DRM_MIPI_DSI && MFD_SYSCON
+	depends on BACKLIGHT_CLASS_DEVICE
 	help
 	  Native reset and DSI initialization of the X620 panel. Bias rails and
 	  external backlight power currently retain firmware configuration.
