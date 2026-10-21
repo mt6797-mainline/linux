@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Build a rich newc initramfs directly from the mounted Debian image."""
+import argparse
 import gzip
 import hashlib
 import json
@@ -135,6 +136,9 @@ def newc():
 
 
 def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--profile', choices=('diagnostic', 'boot'), default='diagnostic')
+    args = parser.parse_args()
     if subprocess.run(['mountpoint', '-q', str(ROOT)]).returncode:
         raise SystemExit('rootfs/ must be a mounted distribution image')
     OUTPUT.mkdir(exist_ok=True)
@@ -167,6 +171,10 @@ def main():
         'usr/sbin/dump.f2fs', 'usr/sbin/resize.f2fs', 'usr/sbin/mke2fs', 'usr/sbin/e2fsck',
         'usr/bin/modetest', 'usr/sbin/insmod',
     ]
+    if args.profile == 'boot':
+        # The full distribution/kernel is unchanged. Only early root mounting
+        # and USB rescue live here, to fit the independent on-flash kernel slot.
+        binaries = ['usr/sbin/blkid', 'usr/sbin/blockdev', 'usr/sbin/resize.f2fs']
     # Some Debian tools are installed in /usr/bin rather than /usr/sbin.
     for path in binaries:
         if not (ROOT / path).exists():
@@ -182,13 +190,21 @@ def main():
         if (ROOT / path).exists():
             add(path)
     # ncurses tools such as nano need compiled terminal descriptions too.
-    for terminal in ('l/linux', 'v/vt100', 'x/xterm', 'x/xterm-256color'):
-        add('usr/share/terminfo/' + terminal)
+    if args.profile == 'diagnostic':
+        for terminal in ('l/linux', 'v/vt100', 'x/xterm', 'x/xterm-256color'):
+            add('usr/share/terminfo/' + terminal)
+    # Built-in WMT probes before switch_root and needs this factory config.
+    add('usr/lib/firmware/mediatek/mt6797/WMT_SOC.cfg')
     for source, dest in [('initrd-init.sh', 'init'),
                          ('initrd-shell.sh', 'usr/bin/x620-shell'),
                          ('initrd-rootfs.sh', 'usr/bin/x620-rootfs'),
                          ('initrd-usb.sh', 'usr/bin/x620-usb')]:
         generated(dest, (SCRIPT_DIR / source).read_bytes(), 0o755)
+    if args.profile == 'boot':
+        generated('usr/bin/x620-shell',
+                  '#!/bin/busybox sh\nexport TERM=linux\n'
+                  'echo "MT6797 boot recovery shell"\nexec /bin/busybox sh -i\n', 0o755)
+        entries['usr/bin/ip'] = (stat.S_IFLNK | 0o777, b'/usr/bin/busybox', 0, 0)
     generated('etc/hostname', 'x620-initrd\n')
     generated('etc/resolv.conf', 'nameserver 1.1.1.1\n')
     generated('etc/profile', 'export PATH=/usr/sbin:/usr/bin:/sbin:/bin\nexport TERM=linux\n')
@@ -196,12 +212,13 @@ def main():
     # The initrd is a curated rescue filesystem, not the full image's dpkg state.
     generated('var/lib/dpkg/status', '')
     generated('etc/motd', 'X620 first-boot diagnostic initrd\n')
-    for alias, target in [('usr/bin/nc', '/usr/bin/nc.openbsd')]:
-        entries[alias] = (stat.S_IFLNK | 0o777, target.encode(), 0, 0)
+    if args.profile == 'diagnostic':
+        for alias, target in [('usr/bin/nc', '/usr/bin/nc.openbsd')]:
+            entries[alias] = (stat.S_IFLNK | 0o777, target.encode(), 0, 0)
     archive = newc()
     compressed = gzip.compress(archive, compresslevel=9, mtime=0)
     (OUTPUT / 'initrd.cpio.gz').write_bytes(compressed)
-    manifest = {'format': 'newc+gzip', 'architecture': 'aarch64',
+    manifest = {'format': 'newc+gzip', 'architecture': 'aarch64', 'profile': args.profile,
                 'entry_count': len(entries), 'uncompressed_bytes': len(archive),
                 'compressed_bytes': len(compressed),
                 'sha256': hashlib.sha256(compressed).hexdigest(),

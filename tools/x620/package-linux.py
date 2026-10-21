@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Android v2 download payload for U-Boot, distinct from the LK relay boot.img."""
+"""Independent Android v2 kernel payload for the U-Boot relay."""
 from pathlib import Path
 import gzip
 import hashlib
@@ -45,7 +45,12 @@ def main():
     cmdline = subprocess.check_output(["fdtget", "-t", "s", str(DIST / "x620.dtb"),
         "/chosen", "bootargs"], text=True).strip()
     result = package(DIST / "x620.dtb", DIST / "linux-boot.img", cmdline)
-    result.update({"format": "Android boot v2", "usage": "U-Boot fastboot RAM download only",
+    persistent = result['bytes'] <= 0xf00000
+    result.update({"format": "Android boot v2", "usage": (
+        "U-Boot fastboot boot or logical flash boot" if persistent else
+        "U-Boot fastboot RAM download only; exceeds logical boot capacity"),
+        "persistent_slot_compatible": persistent,
+        "logical_boot_offset": "0x100000", "logical_boot_capacity": 0xf00000,
         "stock_LK_fastboot": "avoid: boot/reboot handlers actively relock",
         "kernel_version": (ROOT / "out/kernel/include/config/kernel.release").read_text().strip(),
         "hardware_boot": "awaiting owner test",
