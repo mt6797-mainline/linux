@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: GPL-2.0
-obj-$(CONFIG_X620_RELAY_DIAGNOSTICS) += x620-relay.o
+obj-$(CONFIG_MT6797_X620_RELAY_DIAGNOSTICS) += mt6797-x620-relay.o
 #
 # Makefile for misc devices that really don't fit anywhere else.
 #

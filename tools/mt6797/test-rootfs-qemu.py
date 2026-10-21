@@ -12,7 +12,7 @@ import subprocess
 
 
 def main():
-    root = Path(os.environ.get('X620_WORKSPACE', Path(__file__).resolve().parents[3]))
+    root = Path(os.environ.get('MT6797_WORKSPACE') or os.environ.get('X620_WORKSPACE', Path(__file__).resolve().parents[3]))
     parser = argparse.ArgumentParser()
     parser.add_argument('--image', type=Path, default=root / 'dist/debian-arm64-rootfs.img')
     args = parser.parse_args()

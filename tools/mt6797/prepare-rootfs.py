@@ -64,7 +64,7 @@ def main():
         path.chmod(mode)
 
     script_dir = Path(__file__).resolve().parent
-    workspace = Path(os.environ.get('X620_WORKSPACE', script_dir.parents[2]))
+    workspace = Path(os.environ.get('MT6797_WORKSPACE') or os.environ.get('X620_WORKSPACE', script_dir.parents[2]))
     package_profile = (script_dir / 'rootfs-packages.txt').read_text()
     requested = package_profile.splitlines()
     status = subprocess.run(['chroot', str(root), '/usr/bin/dpkg-query', '-W',

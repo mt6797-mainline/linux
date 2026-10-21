@@ -1,10 +1,10 @@
 # SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
 %YAML 1.2
 ---
-$id: http://devicetree.org/schemas/phy/leeco,x620-lk-usb-resources.yaml#
+$id: http://devicetree.org/schemas/phy/mediatek,mt6797-lk-usb-resources.yaml#
 $schema: http://devicetree.org/meta-schemas/core.yaml#
 
-title: LeEco X620 USB2 resources retained from stock LK
+title: MediaTek MT6797 USB2 resources retained from stock LK
 
 maintainers:
   - dysorder <dysorder@users.noreply.github.com>
@@ -17,7 +17,13 @@ description: |
 
 properties:
   compatible:
-    const: leeco,x620-lk-usb-resources
+    oneOf:
+      - const: mediatek,mt6797-lk-usb-resources
+      - items:
+          - const: mediatek,mt6797-lk-usb-resources
+          - const: leeco,x620-lk-usb-resources
+      - const: leeco,x620-lk-usb-resources
+        deprecated: true
 
   reg:
     items:

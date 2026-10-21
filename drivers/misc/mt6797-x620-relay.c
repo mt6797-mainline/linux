@@ -12,14 +12,14 @@
 #include <linux/sizes.h>
 #include <linux/workqueue.h>
 
-#define X620_LOG_BASE 0x444bf000
-#define X620_LOG_SIGNATURE 0x43474244
-#define X620_LOG_HEADER 12
+#define MT6797_X620_LOG_BASE 0x444bf000
+#define MT6797_X620_LOG_SIGNATURE 0x43474244
+#define MT6797_X620_LOG_HEADER 12
 
 static struct earlycon_device *ram_console;
-static unsigned int log_capacity = SZ_4K - X620_LOG_HEADER;
+static unsigned int log_capacity = SZ_4K - MT6797_X620_LOG_HEADER;
 
-static void x620_ram_write(struct console *con, const char *s, unsigned int count)
+static void mt6797_x620_ram_write(struct console *con, const char *s, unsigned int count)
 {
 	void __iomem *base = ram_console->port.membase;
 	u32 start = readl(base + 4), size = readl(base + 8);
@@ -27,12 +27,12 @@ static void x620_ram_write(struct console *con, const char *s, unsigned int coun
 	if (start > log_capacity || size > log_capacity)
 		return;
 	/* Before normal ioremap is available retain the first page, not a ring. */
-	if (log_capacity == SZ_4K - X620_LOG_HEADER)
+	if (log_capacity == SZ_4K - MT6797_X620_LOG_HEADER)
 		count = min(count, log_capacity - size);
 	while (count--) {
-		writeb(*s++, base + X620_LOG_HEADER + start);
+		writeb(*s++, base + MT6797_X620_LOG_HEADER + start);
 		start++;
-		if (log_capacity != SZ_4K - X620_LOG_HEADER)
+		if (log_capacity != SZ_4K - MT6797_X620_LOG_HEADER)
 			start %= log_capacity;
 		size = min(size + 1, log_capacity);
 	}
@@ -41,51 +41,53 @@ static void x620_ram_write(struct console *con, const char *s, unsigned int coun
 	writel(size, base + 8);
 }
 
-static int __init x620_ram_setup(struct earlycon_device *dev, const char *options)
+static int __init mt6797_x620_ram_setup(struct earlycon_device *dev, const char *options)
 {
 	if (!initial_boot_params ||
 	    fdt_node_check_compatible(initial_boot_params, 0, "leeco,x620") ||
-	    dev->port.mapbase != X620_LOG_BASE || !dev->port.membase)
+	    dev->port.mapbase != MT6797_X620_LOG_BASE || !dev->port.membase)
 		return -ENODEV;
 	ram_console = dev;
-	writel(X620_LOG_SIGNATURE, dev->port.membase);
+	writel(MT6797_X620_LOG_SIGNATURE, dev->port.membase);
 	writel(0, dev->port.membase + 4);
 	writel(0, dev->port.membase + 8);
-	dev->con->write = x620_ram_write;
+	dev->con->write = mt6797_x620_ram_write;
 	return 0;
 }
-EARLYCON_DECLARE(x620ram, x620_ram_setup);
+EARLYCON_DECLARE(mt6797ram, mt6797_x620_ram_setup);
+/* Retain the early console name used by existing relay images. */
+EARLYCON_DECLARE(x620ram, mt6797_x620_ram_setup);
 
-static int __init x620_ram_expand(void)
+static int __init mt6797_x620_ram_expand(void)
 {
 	void __iomem *base;
 
 	if (!ram_console)
 		return 0;
-	base = ioremap(X620_LOG_BASE, SZ_64K);
+	base = ioremap(MT6797_X620_LOG_BASE, SZ_64K);
 	if (!base)
 		return -ENOMEM;
 	console_lock();
 	/* The old bounded page has no wrapped data; preserve its write offset. */
 	writel(readl(base + 8), base + 4);
 	ram_console->port.membase = base;
-	log_capacity = SZ_64K - X620_LOG_HEADER;
+	log_capacity = SZ_64K - MT6797_X620_LOG_HEADER;
 	console_unlock();
 	pr_info("X620_RELAY: persistent console expanded to 64 KiB\n");
 	return 0;
 }
-early_initcall(x620_ram_expand);
+early_initcall(mt6797_x620_ram_expand);
 
-struct x620_refresh {
+struct mt6797_x620_refresh {
 	void __iomem *ovl, *dsi, *mutex;
 	struct delayed_work work;
 	u32 framebuffer;
 };
 
-static void x620_refresh_work(struct work_struct *work)
+static void mt6797_x620_refresh_work(struct work_struct *work)
 {
-	struct x620_refresh *p = container_of(to_delayed_work(work),
-					    struct x620_refresh, work);
+	struct mt6797_x620_refresh *p = container_of(to_delayed_work(work),
+					    struct mt6797_x620_refresh, work);
 	u32 start;
 
 	/* Stop if another owner reprograms layer 0. Never wait for DSI BUSY. */
@@ -101,16 +103,16 @@ static void x620_refresh_work(struct work_struct *work)
 	schedule_delayed_work(&p->work, msecs_to_jiffies(100));
 }
 
-static void x620_refresh_stop(void *data)
+static void mt6797_x620_refresh_stop(void *data)
 {
-	struct x620_refresh *p = data;
+	struct mt6797_x620_refresh *p = data;
 
 	cancel_delayed_work_sync(&p->work);
 }
 
-static int x620_refresh_probe(struct platform_device *pdev)
+static int mt6797_x620_refresh_probe(struct platform_device *pdev)
 {
-	struct x620_refresh *p;
+	struct mt6797_x620_refresh *p;
 	int ret;
 
 	if (!of_machine_is_compatible("leeco,x620"))
@@ -140,8 +142,8 @@ static int x620_refresh_probe(struct platform_device *pdev)
 		return dev_err_probe(&pdev->dev, -ENODEV, "unexpected retained display state\n");
 	writel(BIT(0), p->ovl + 0x2c);
 	writel(readl(p->ovl + 0x30) & ~BIT(8), p->ovl + 0x30);
-	INIT_DELAYED_WORK(&p->work, x620_refresh_work);
-	ret = devm_add_action_or_reset(&pdev->dev, x620_refresh_stop, p);
+	INIT_DELAYED_WORK(&p->work, mt6797_x620_refresh_work);
+	ret = devm_add_action_or_reset(&pdev->dev, mt6797_x620_refresh_stop, p);
 	if (ret)
 		return ret;
 	schedule_delayed_work(&p->work, 0);
@@ -149,15 +151,15 @@ static int x620_refresh_probe(struct platform_device *pdev)
 	return 0;
 }
 
-static const struct of_device_id x620_refresh_ids[] = {
+static const struct of_device_id mt6797_x620_refresh_ids[] = {
 	{ .compatible = "leeco,x620-lk-refresh" },
 	{ }
 };
-static struct platform_driver x620_refresh_driver = {
-	.probe = x620_refresh_probe,
+static struct platform_driver mt6797_x620_refresh_driver = {
+	.probe = mt6797_x620_refresh_probe,
 	.driver = {
 		.name = "x620-lk-refresh",
-		.of_match_table = x620_refresh_ids,
+		.of_match_table = mt6797_x620_refresh_ids,
 	},
 };
-builtin_platform_driver(x620_refresh_driver);
+builtin_platform_driver(mt6797_x620_refresh_driver);

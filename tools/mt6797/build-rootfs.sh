@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # Build only inside a distro-specific F2FS image mounted at rootfs/.
 set -euo pipefail
-WORKSPACE=${X620_WORKSPACE:-$(cd "$(dirname "$0")/../../.." && pwd)}
+WORKSPACE=${MT6797_WORKSPACE:-${X620_WORKSPACE:-$(cd "$(dirname "$0")/../../.." && pwd)}}
 task_image="$WORKSPACE/dist/debian-arm64-rootfs.img"
 task_mount="$WORKSPACE/rootfs"
 task_seed="$WORKSPACE/artifacts/rootfs/debian-arm64.img"
-task_tools="$WORKSPACE/linux-6.12/tools/x620"
+task_tools="$WORKSPACE/linux-6.12/tools/mt6797"
 mkdir -p "$WORKSPACE/dist" "$WORKSPACE/artifacts" "$task_mount"
 if mountpoint -q "$task_mount"; then
     echo 'rootfs/ is already mounted; finish that operation first' >&2

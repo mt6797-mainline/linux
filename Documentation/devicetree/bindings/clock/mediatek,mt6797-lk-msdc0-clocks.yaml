@@ -1,10 +1,10 @@
 # SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
 %YAML 1.2
 ---
-$id: http://devicetree.org/schemas/clock/leeco,x620-msdc0-clocks.yaml#
+$id: http://devicetree.org/schemas/clock/mediatek,mt6797-lk-msdc0-clocks.yaml#
 $schema: http://devicetree.org/meta-schemas/core.yaml#
 
-title: LeEco X620 isolated MSDC0 bring-up clocks
+title: MediaTek MT6797 isolated MSDC0 bring-up clocks
 
 maintainers:
   - dysorder <dysorder@users.noreply.github.com>
@@ -18,7 +18,13 @@ description: |
 
 properties:
   compatible:
-    const: leeco,x620-msdc0-clocks
+    oneOf:
+      - const: mediatek,mt6797-lk-msdc0-clocks
+      - items:
+          - const: mediatek,mt6797-lk-msdc0-clocks
+          - const: leeco,x620-msdc0-clocks
+      - const: leeco,x620-msdc0-clocks
+        deprecated: true
 
   "#clock-cells":
     const: 1

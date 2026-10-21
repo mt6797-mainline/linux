@@ -78,16 +78,17 @@ static int mt6797_display_clock_probe(struct platform_device *pdev)
 }
 
 static const struct of_device_id mt6797_display_clock_ids[] = {
+	{ .compatible = "mediatek,mt6797-lk-display-clock" },
 	{ .compatible = "leeco,x620-display-clock" },
 	{ }
 };
 static struct platform_driver mt6797_display_clock_driver = {
 	.probe = mt6797_display_clock_probe,
 	.driver = {
-		.name = "x620-display-clock",
+		.name = "mt6797-lk-display-clock",
 		.of_match_table = mt6797_display_clock_ids,
 	},
 };
 module_platform_driver(mt6797_display_clock_driver);
-MODULE_DESCRIPTION("X620 firmware-retained MM clock parent");
+MODULE_DESCRIPTION("MT6797 firmware-retained MM clock parent");
 MODULE_LICENSE("GPL");

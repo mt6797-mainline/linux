@@ -11,7 +11,7 @@ config COMMON_CLK_MT6797_MSDC_LK
 	select MFD_SYSCON
 	select COMMON_CLK_MEDIATEK
 	help
-	  X620 bring-up provider for MSDC0 source/HCLK and its source gate.
+	  MT6797 bring-up provider for MSDC0 source/HCLK and its source gate.
 	  Selects either the 26 MHz oscillator or a private 400 MHz MSDCPLL
 	  for this controller. Other PLLs and firmware pin/power settings
 	  remain unchanged.
@@ -23,7 +23,7 @@ config COMMON_CLK_MEDIATEK
 	  MediaTek SoCs' clock support.
 
 config COMMON_CLK_MT6797_DISPLAY_LK
-	bool "X620 firmware-retained MM parent for native display gates"
+	bool "MT6797 firmware-retained MM parent for native display gates"
 	depends on ARM64 && OF && !COMMON_CLK_MT6797
 	select MFD_SYSCON
 	select COMMON_CLK_MEDIATEK

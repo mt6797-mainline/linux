@@ -118,4 +118,4 @@ obj-$(CONFIG_BATTERY_UG3105)	+= ug3105_battery.o
 obj-$(CONFIG_CHARGER_QCOM_SMB2)	+= qcom_pmi8998_charger.o
 obj-$(CONFIG_FUEL_GAUGE_MM8013)	+= mm8013.o
 
-obj-$(CONFIG_MT6797_CHARGER) += mt6797-charger.o
+obj-$(CONFIG_CHARGER_MT6797_X620) += mt6797-x620-charger.o

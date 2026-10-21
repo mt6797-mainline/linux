@@ -1019,12 +1019,15 @@ config FUEL_GAUGE_MM8013
 	  the state of charge, temperature, cycle count, actual and design
 	  capacity, etc.
 
-config MT6797_CHARGER
-	tristate "MT6797 dual charger battery policy"
+config CHARGER_MT6797_X620
+	tristate "MediaTek MT6797 LeEco X620 battery charging policy"
 	depends on OF && IIO && THERMAL
 	depends on CHARGER_BQ25890 && BATTERY_CW2015
 	help
-	  Factory battery temperature and USB input limits for MT6797 boards
-	  with a CW2015 gauge and BQ25890/BQ25892 chargers.
+	  Enable the factory battery charging policy for the LeEco X620
+	  (MediaTek MT6797). This uses a CW2015 battery gauge and a pair of
+	  BQ25890/BQ25892 chargers. The driver coordinates these supplies
+	  with the Type-C source current advertisement and thermal cooling
+	  limits, preserving the factory battery temperature limits.
 
 endif # POWER_SUPPLY

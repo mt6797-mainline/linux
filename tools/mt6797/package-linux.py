@@ -8,7 +8,7 @@ import os
 import struct
 import subprocess
 
-ROOT = Path(os.environ.get('X620_WORKSPACE', Path(__file__).resolve().parents[3]))
+ROOT = Path(os.environ.get('MT6797_WORKSPACE') or os.environ.get('X620_WORKSPACE', Path(__file__).resolve().parents[3]))
 KERNEL_SOURCE = Path(__file__).resolve().parents[2]
 DIST = ROOT / "dist"
 

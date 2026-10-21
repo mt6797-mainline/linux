@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 KERNEL_SOURCE=$(cd "$(dirname "$0")/../.." && pwd)
-WORKSPACE=${X620_WORKSPACE:-$(dirname "$KERNEL_SOURCE")}
+WORKSPACE=${MT6797_WORKSPACE:-${X620_WORKSPACE:-$(dirname "$KERNEL_SOURCE")}}
 KERNEL_OUTPUT="$WORKSPACE/out/kernel"
 mkdir -p "$KERNEL_OUTPUT" "$WORKSPACE/out" "$WORKSPACE/dist"
 export ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu-
@@ -9,11 +9,11 @@ export KBUILD_BUILD_USER=builder KBUILD_BUILD_HOST=x620
 export KBUILD_BUILD_TIMESTAMP='Tue Oct 13 00:00:00 UTC 2026'
 export KBUILD_BUILD_VERSION=1
 if [[ ! -f "$KERNEL_OUTPUT/.config" ]]; then
-    cp "$KERNEL_SOURCE/arch/arm64/configs/x620_relay.config" "$KERNEL_OUTPUT/.config"
+    cp "$KERNEL_SOURCE/arch/arm64/configs/mt6797_x620.config" "$KERNEL_OUTPUT/.config"
     make -C "$KERNEL_SOURCE" O="$KERNEL_OUTPUT" olddefconfig
 else
     bash "$KERNEL_SOURCE/scripts/kconfig/merge_config.sh" -m -O "$KERNEL_OUTPUT" \
-        "$KERNEL_OUTPUT/.config" "$KERNEL_SOURCE/arch/arm64/configs/x620_relay.config"
+        "$KERNEL_OUTPUT/.config" "$KERNEL_SOURCE/arch/arm64/configs/mt6797_x620.config"
     make -C "$KERNEL_SOURCE" O="$KERNEL_OUTPUT" olddefconfig
 fi
 make -C "$KERNEL_SOURCE" O="$KERNEL_OUTPUT" -j"${BUILD_JOBS:-10}" Image modules

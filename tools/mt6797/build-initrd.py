@@ -12,7 +12,7 @@ import stat
 import subprocess
 
 SCRIPT_DIR = Path(__file__).resolve().parent
-WORKSPACE = Path(os.environ.get('X620_WORKSPACE', SCRIPT_DIR.parents[2]))
+WORKSPACE = Path(os.environ.get('MT6797_WORKSPACE') or os.environ.get('X620_WORKSPACE', SCRIPT_DIR.parents[2]))
 ROOT = WORKSPACE / 'rootfs'
 OUTPUT = WORKSPACE / 'dist'
 entries = {}

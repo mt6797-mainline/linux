@@ -55,7 +55,7 @@
 		#address-cells = <2>;
 		#size-cells = <2>;
 		ranges;
-		bootargs = "console=tty0 earlycon=x620ram,mmio32,0x444bf000 keep_bootcon loglevel=8 ignore_loglevel printk.time=1 clk_ignore_unused pd_ignore_unused maxcpus=1 cpuidle.off=1 rdinit=/init panic=0 fsck.mode=skip fbcon=nodefer";
+		bootargs = "console=tty0 earlycon=mt6797ram,mmio32,0x444bf000 keep_bootcon loglevel=8 ignore_loglevel printk.time=1 clk_ignore_unused pd_ignore_unused maxcpus=1 cpuidle.off=1 rdinit=/init panic=0 fsck.mode=skip fbcon=nodefer";
 		framebuffer@bd0c0000 {
 			compatible = "simple-framebuffer";
 			reg = <0 0xbd0c0000 0 0x7f8000>;
@@ -338,7 +338,7 @@
 		regulator-always-on;
 	};
 	usb_resources: usb-resources@11290000 {
-		compatible = "leeco,x620-lk-usb-resources";
+		compatible = "mediatek,mt6797-lk-usb-resources", "leeco,x620-lk-usb-resources";
 		reg = <0 0x11290000 0 0x1000>, <0 0x10001000 0 0x1000>;
 		reg-names = "phy", "infracfg";
 		#phy-cells = <0>;
@@ -372,7 +372,7 @@
 	};
 
 	msdc_clocks: msdc0-clocks {
-		compatible = "leeco,x620-msdc0-clocks";
+		compatible = "mediatek,mt6797-lk-msdc0-clocks", "leeco,x620-msdc0-clocks";
 		#clock-cells = <1>;
 		mediatek,topckgen = <&topckgen>;
 		mediatek,infracfg = <&infrasys>;
@@ -420,7 +420,7 @@
 	};
 
 	display_clock: display-clock {
-		compatible = "leeco,x620-display-clock";
+		compatible = "mediatek,mt6797-lk-display-clock", "leeco,x620-display-clock";
 		#clock-cells = <1>;
 		mediatek,topckgen = <&topckgen>;
 		mediatek,apmixedsys = <&apmixedsys>;

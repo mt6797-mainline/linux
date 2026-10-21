@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0-only
-/* Isolated MSDC0 clocks for X620 bring-up; other PLLs remain firmware-owned. */
+/* Isolated MT6797 MSDC0 clocks; other PLLs remain firmware-owned. */
 #include <linux/clk.h>
 #include <linux/clk-provider.h>
 #include <linux/math64.h>
@@ -24,7 +24,7 @@ struct msdc_lk_clock {
 /* Same register layout as the upstream MT6797 MSDCPLL descriptor. */
 static const struct mtk_pll_data msdc_lk_pll = {
 	.id = 0,
-	.name = "x620-msdcpll",
+	.name = "mt6797-lk-msdcpll",
 	.reg = 0x250,
 	.pwr_reg = 0x25c,
 	.en_mask = 0x120,
@@ -168,7 +168,7 @@ static int msdc_lk_probe(struct platform_device *pdev)
 		if (ret)
 			return ret;
 	} else {
-		data->hws[0] = devm_clk_hw_register_fixed_rate(dev, "x620-msdc0-source",
+		data->hws[0] = devm_clk_hw_register_fixed_rate(dev, "mt6797-lk-msdc0-source",
 							    NULL, 0, 26000000);
 		if (IS_ERR(data->hws[0]))
 			return PTR_ERR(data->hws[0]);
@@ -179,7 +179,7 @@ static int msdc_lk_probe(struct platform_device *pdev)
 		return ret;
 	for (i = 0; i < 2; i++) {
 		struct clk_init_data init = {
-			.name = i ? "x620-msdc0-source-gate" : "x620-msdc0-hclk",
+			.name = i ? "mt6797-lk-msdc0-source-gate" : "mt6797-lk-msdc0-hclk",
 			.ops = &msdc_lk_ops,
 		};
 		const struct clk_hw *parent = data->hws[0];
@@ -206,16 +206,17 @@ static int msdc_lk_probe(struct platform_device *pdev)
 }
 
 static const struct of_device_id msdc_lk_ids[] = {
+	{ .compatible = "mediatek,mt6797-lk-msdc0-clocks" },
 	{ .compatible = "leeco,x620-msdc0-clocks" },
 	{ }
 };
 static struct platform_driver msdc_lk_driver = {
 	.probe = msdc_lk_probe,
 	.driver = {
-		.name = "x620-msdc0-clocks",
+		.name = "mt6797-lk-msdc0-clocks",
 		.of_match_table = msdc_lk_ids,
 	},
 };
 module_platform_driver(msdc_lk_driver);
-MODULE_DESCRIPTION("X620 isolated MSDC0 bring-up clocks");
+MODULE_DESCRIPTION("MT6797 isolated MSDC0 bring-up clocks");
 MODULE_LICENSE("GPL");

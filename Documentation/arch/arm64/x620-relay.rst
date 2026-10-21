@@ -24,7 +24,7 @@ Board-scoped log messages bracket CPU_ON to distinguish a stalled firmware
 call from a failure later in secondary startup. Automatic eight-A53 boot
 still needs checking on hardware; A72 investigation is deferred.
 
-``CONFIG_X620_RELAY_DIAGNOSTICS`` enables two temporary adapters:
+``CONFIG_MT6797_X620_RELAY_DIAGNOSTICS`` enables two temporary adapters:
 
 * ``earlycon=x620ram,mmio32,0x444bf000 keep_bootcon`` records console output
   using the vendor persistent-RAM signature/start/size layout. The initial
@@ -41,12 +41,12 @@ still needs checking on hardware; A72 investigation is deferred.
 Reproducing the kernel build
 ----------------------------
 
-The independent ``arch/arm64/configs/x620_relay.config`` profile includes
+The independent ``arch/arm64/configs/mt6797_x620.config`` profile includes
 F2FS and diagnostic userspace support without editing a source defconfig.
 Use an out-of-tree build and build only the X620 DT target::
 
     export ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu-
-    make O=../out/kernel KCONFIG_ALLCONFIG="$PWD/arch/arm64/configs/x620_relay.config" allnoconfig
+    make O=../out/kernel KCONFIG_ALLCONFIG="$PWD/arch/arm64/configs/mt6797_x620.config" allnoconfig
     make O=../out/kernel -j10 Image mediatek/mt6797-leeco-x620.dtb
 
 Reuse the same output directory for subsequent builds. Merge configuration
@@ -56,7 +56,7 @@ and packages ``dist/linux-boot.img`` with gzip Image, initrd and board DT in an
 Android v2 container for U-Boot's fastboot RAM-download path. This payload is
 distinct from the LK-facing ``dist/boot.img`` that contains the U-Boot relay.
 
-The initrd source and packaging tools are versioned under ``tools/x620/``.
+The initrd source and packaging tools are versioned under ``tools/mt6797/``.
 They expect a companion workspace containing ``out/kernel``, ``dist`` and a
 Debian F2FS image mounted at ``rootfs/``. ``X620_WORKSPACE`` overrides the
 default workspace directory, which is the parent of the kernel checkout.
@@ -64,9 +64,9 @@ The Debian image must contain the diagnostic packages used by the builder.
 With the image already mounted, reproduce the payload using::
 
     export X620_WORKSPACE=/path/to/workspace
-    tools/x620/build-kernel.sh
-    tools/x620/build-initrd.py
-    tools/x620/package-linux.py
+    tools/mt6797/build-kernel.sh
+    tools/mt6797/build-initrd.py
+    tools/mt6797/package-linux.py
 
 The builder assembles newc entries in memory, reads packages only from the
 mounted distribution image, and includes compiled terminfo for ncurses

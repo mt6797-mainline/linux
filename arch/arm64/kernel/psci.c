@@ -46,11 +46,11 @@ static int cpu_psci_cpu_boot(unsigned int cpu)
 	if (err)
 		return err;
 
-	if (IS_ENABLED(CONFIG_X620_RELAY_DIAGNOSTICS))
+	if (IS_ENABLED(CONFIG_MT6797_X620_RELAY_DIAGNOSTICS))
 		pr_info("X620_CPU_ON: CPU%u MPIDR=%llx entry=%pa\n",
 			cpu, cpu_logical_map(cpu), &pa_secondary_entry);
 	err = psci_ops.cpu_on(cpu_logical_map(cpu), pa_secondary_entry);
-	if (IS_ENABLED(CONFIG_X620_RELAY_DIAGNOSTICS))
+	if (IS_ENABLED(CONFIG_MT6797_X620_RELAY_DIAGNOSTICS))
 		pr_info("X620_CPU_ON_RETURN: CPU%u ret=%d\n", cpu, err);
 	mt6797_a72_finish(cpu, err);
 	if (err && err != -EPERM)

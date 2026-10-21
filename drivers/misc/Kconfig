@@ -5,7 +5,7 @@
 
 menu "Misc devices"
 
-config X620_RELAY_DIAGNOSTICS
+config MT6797_X620_RELAY_DIAGNOSTICS
 	bool "LeEco X620 retained-LK boot diagnostics"
 	depends on ARM64 && OF && FB_SIMPLE=y
 	select SERIAL_CORE
